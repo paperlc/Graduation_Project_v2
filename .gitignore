@@ -1,0 +1,27 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environments / virtualenv
+.env
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Streamlit / logs
+.streamlit/
+.streamlit/credentials.toml
+
+# Data / checkpoints (keep ledger, ignore other large data if added)
+data/**/*.log
+data/**/*.tmp
+
+# Packaging / build
+*.egg-info/
+build/
+dist/

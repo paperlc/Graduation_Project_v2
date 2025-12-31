@@ -1,0 +1,10 @@
+pillow
+streamlit
+chromadb
+langchain>=0.3
+langchain-openai>=0.3
+openai
+mcp
+fastmcp
+requests
+python-dotenv

@@ -1,0 +1,111 @@
+{
+  "meta": {
+    "network": "simulated-ledger",
+    "note": "文本账本用于演示，不连接真实链",
+    "default_actor": "treasury"
+  },
+  "accounts": {
+    "alice": 1000.0,
+    "bob": 500.0,
+    "treasury": 10000.0,
+    "charlie": 750.5,
+    "dave": 120.0
+  },
+  "token_balances": {
+    "alice": { "USDT": 1200.0, "UNI": 150.0, "DAI": 800.0 },
+    "bob": { "USDT": 300.0, "UNI": 20.0, "PEPE": 5000000.0 },
+    "treasury": { "USDT": 50000.0, "UNI": 10000.0, "DAI": 20000.0 },
+    "charlie": { "USDT": 50.0, "UNI": 5.0, "ETHX": 10.0 },
+    "dave": { "USDT": 10.0, "UNI": 1.0 }
+  },
+  "approvals": {
+    "alice": { "dex_router": 1000.0 },
+    "bob": { "malicious_router": 0.0 },
+    "charlie": { "lending_pool": 500.0 }
+  },
+  "contracts": {
+    "0xdef0000000000000000000000000000000000001": {
+      "owner": "0xowner0001",
+      "bytecode": "0x6001600155"
+    },
+    "0xrouter0000000000000000000000000000000000": {
+      "owner": "treasury",
+      "bytecode": "0x6001600155600080"
+    },
+    "0xvault000000000000000000000000000000000002": {
+      "owner": "0xdeadbeef000000000000000000000000000000",
+      "bytecode": "0x6080604052"
+    }
+  },
+  "ens": {
+    "vitalik.eth": "0x0000000000000000000000000000000000000000",
+    "official.treasury.eth": "treasury"
+  },
+  "prices": {
+    "ETH": 3200.0,
+    "USDT": 1.0,
+    "UNI": 8.5,
+    "DAI": 1.0,
+    "PEPE": 0.000001,
+    "ETHX": 3205.0
+  },
+  "reputations": {
+    "0xdeadbeef000000000000000000000000000000": "blacklist",
+    "malicious_router": "blacklist",
+    "0xvault000000000000000000000000000000000002": "watchlist"
+  },
+  "transactions": [
+    {
+      "tx": "genesis-001",
+      "from": "treasury",
+      "to": "alice",
+      "amount": 500.0,
+      "token": "ETH",
+      "timestamp": "2025-01-01T00:00:00Z",
+      "memo": "初始拨款"
+    },
+    {
+      "tx": "genesis-002",
+      "from": "treasury",
+      "to": "bob",
+      "amount": 250.0,
+      "token": "ETH",
+      "timestamp": "2025-01-01T00:05:00Z",
+      "memo": "初始拨款"
+    },
+    {
+      "tx": "daily-001",
+      "from": "alice",
+      "to": "dex_router",
+      "amount": 5.0,
+      "token": "ETH",
+      "timestamp": "2025-02-01T10:15:00Z",
+      "memo": "swap to USDT"
+    },
+    {
+      "tx": "alert-001",
+      "from": "treasury",
+      "to": "0xdeadbeef000000000000000000000000000000",
+      "amount": 1.0,
+      "token": "ETH",
+      "timestamp": "2025-02-02T03:20:00Z",
+      "memo": "测试黑名单转出"
+    },
+    {
+      "tx": "daily-002",
+      "from": "charlie",
+      "to": "lending_pool",
+      "amount": 100.0,
+      "token": "USDT",
+      "timestamp": "2025-02-03T08:00:00Z",
+      "memo": "质押"
+    }
+  ],
+  "liquidity_pools": {
+    "USDT-ETH": { "token0": "USDT", "token1": "ETH", "liquidity_usd": 1000000.0, "fee_bps": 30 },
+    "UNI-ETH": { "token0": "UNI", "token1": "ETH", "liquidity_usd": 250000.0, "fee_bps": 50 },
+    "PEPE-ETH": { "token0": "PEPE", "token1": "ETH", "liquidity_usd": 150000.0, "fee_bps": 100 }
+  },
+  "bridges": [],
+  "stakes": {}
+}
