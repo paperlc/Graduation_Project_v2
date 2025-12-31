@@ -41,6 +41,9 @@ streamlit run app.py
   - `VISION_ENABLED=true|false`；`VISION_API_KEY`（可兼容 LLM/OPENAI）、`VISION_API_BASE`、`VISION_MODEL`（OpenAI 兼容接口即可接入本地或厂商视觉模型）
 - 防御
   - `DEFENSE_DEFAULT_ON=true|false` 控制默认是否启用防御（UI 可再次切换）
+- 调试/多轮工具
+  - `LOG_LEVEL`（默认 WARNING，需更详细日志可设 INFO）
+  - `TOOL_CALL_MAX_ROUNDS`（默认 3，控制多轮 tool_call 的上限，防止长循环）
 - MCP
   - `MCP_SERVER_URL`（默认推荐：常驻 MCP 服务 URL，SSE/HTTP 兼容），`MCP_SERVER_HEADERS`（JSON 头部，可放鉴权）  
   - `MCP_SERVER_CMD`（可选回退：如 `python -m src.simulation.server`，每次调用临时拉起 MCP 进程）
@@ -74,10 +77,14 @@ streamlit run app.py
   ```  
   前端环境设置 `MCP_SERVER_URL=http://127.0.0.1:8001/sse`（如需鉴权头，设 `MCP_SERVER_HEADERS='{"Authorization":"Bearer xxx"}'`）。此模式连接复用、无需频繁拉起子进程。
 - 本地 stdio（回退/快速体验）：设置 `MCP_SERVER_CMD="python -m src.simulation.server"`，前端每次调用会临时拉起 MCP 进程。
- - 一键：`bash scripts/quickstart.sh`（如有 `.env` 会自动加载，将 MCP SSE 常驻并启动 Streamlit，Ctrl+C 结束时顺便退出 MCP）。
+- 一键：`bash scripts/quickstart.sh`（如有 `.env` 会自动加载，将 MCP SSE 常驻并启动 Streamlit，Ctrl+C 结束时顺便退出 MCP）。
 
 ## 工具一键回归
 运行 `python scripts/test_mcp_tools.py`（会复制临时账本，避免污染原始数据），可快速回归所有 MCP 工具。
+
+## 调试 / 决策链路可视化
+- 侧边栏可勾选 “Show debug messages” 查看发送给 LLM 的原始消息。
+- 每条回复下的“决策过程”折叠面板会展示工具调用 trace 和完整 LLM 调用链（每轮输入/输出、tool_calls）。多轮工具调用上限由 `TOOL_CALL_MAX_ROUNDS` 控制。
 
 ## 发布/部署
 - 本地或服务器直接运行 `streamlit run app.py`，无需额外后端。
