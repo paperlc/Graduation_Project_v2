@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from importlib import import_module
 from typing import List
 
+import logging
 from mcp.server.fastmcp import FastMCP
 
 from .ledger import Ledger
 
-# 新增工具模块列表（单文件单工具，方便增删）
+# Tool modules (one file per tool for easy add/remove)
 TOOL_MODULES: List[str] = [
     "src.simulation.tools.get_eth_balance",
     "src.simulation.tools.get_token_balance",
@@ -34,22 +36,43 @@ TOOL_MODULES: List[str] = [
 ]
 
 
-def build_server() -> FastMCP:
-    mcp = FastMCP("web3-ledger")
+logger = logging.getLogger(__name__)
+
+
+def build_server(host: str | None = None, port: int | None = None, sse_path: str | None = None) -> FastMCP:
+    logger.info("Building MCP server with ledger and %d tools", len(TOOL_MODULES))
+    mcp = FastMCP(
+        "web3-ledger",
+        host=host or "127.0.0.1",
+        port=port or 8000,
+        sse_path=sse_path or "/sse",
+    )
     ledger = Ledger()
 
     for module_path in TOOL_MODULES:
         module = import_module(module_path)
         if hasattr(module, "register"):
             module.register(mcp, ledger)
+            logger.info("Registered tool module: %s", module_path)
+        else:
+            logger.warning("Module %s missing register()", module_path)
 
     return mcp
 
 
 def run():
     """Entry point for the MCP simulation server."""
-    mcp = build_server()
-    mcp.run()
+    transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    port = int(os.getenv("MCP_PORT", "8001"))
+    sse_path = os.getenv("MCP_SSE_PATH", "/sse")
+    mcp = build_server(host=host, port=port, sse_path=sse_path)
+    logger.info("Starting MCP server... transport=%s host=%s port=%s sse_path=%s", transport, host, port, sse_path)
+    if transport == "stdio":
+        mcp.run()
+    else:
+        # fastmcp supports "http", "sse", "streamable-http"
+        mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

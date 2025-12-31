@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from pathlib import Path
 
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 
 def _encode_image(image_path: str | Path) -> str:
@@ -31,6 +34,7 @@ def verify_image_consistency(text_claim: str, image_path: str, model: str | None
     encoded_image = _encode_image(image_path)
 
     try:
+        logger.info("vision check start model=%s image=%s", model_name, image_path)
         response = client.chat.completions.create(
             model=model_name,
             messages=[
@@ -55,8 +59,11 @@ def verify_image_consistency(text_claim: str, image_path: str, model: str | None
             ],
             temperature=0,
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("vision check failed: %s", exc)
         return False
 
     result_text = response.choices[0].message.content.strip().upper()
-    return result_text.startswith("CONSISTENT")
+    is_consistent = result_text.startswith("CONSISTENT")
+    logger.info("vision check result=%s", result_text)
+    return is_consistent
