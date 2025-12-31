@@ -37,6 +37,7 @@ streamlit run app.py
   - `RAG_PROVIDER=local|remote|off`（off 时完全跳过 RAG）  
   - 本地：默认 Chroma；可指定 `CHROMA_PATH` 持久化；无 Embedding Key 时自动跳过。
   - 远程：`RAG_REMOTE_URL`（POST {query, top_k}，返回 documents/results）、`RAG_REMOTE_API_KEY`
+  - `RAG_TWEET_FILE`（可选，默认 data/tweets.json，作为舆情/推特语料注入本地 RAG，可用于投毒/权威文档模拟）
 - 视觉
   - `VISION_ENABLED=true|false`；`VISION_API_KEY`（可兼容 LLM/OPENAI）、`VISION_API_BASE`、`VISION_MODEL`（OpenAI 兼容接口即可接入本地或厂商视觉模型）
 - 防御
@@ -44,6 +45,10 @@ streamlit run app.py
 - 调试/多轮工具
   - `LOG_LEVEL`（默认 WARNING，需更详细日志可设 INFO）
   - `TOOL_CALL_MAX_ROUNDS`（默认 3，控制多轮 tool_call 的上限，防止长循环）
+  - `TOOL_CALL_TIMEOUT`（默认 15 秒），`TOOL_CALL_RETRIES`（默认 1 次）
+- 账本
+  - `LEDGER_FILE`（初始化种子 JSON，可指定其他账本种子）
+  - `LEDGER_DB`（SQLite 账本文件路径，默认 data/ledger/ledger.db）
 - MCP
   - `MCP_SERVER_URL`（默认推荐：常驻 MCP 服务 URL，SSE/HTTP 兼容），`MCP_SERVER_HEADERS`（JSON 头部，可放鉴权）  
   - `MCP_SERVER_CMD`（可选回退：如 `python -m src.simulation.server`，每次调用临时拉起 MCP 进程）
@@ -62,8 +67,11 @@ streamlit run app.py
 - 兼容旧名：`get_balance`、`transfer`
 
 ## 账本说明
-- 文件：`data/ledger/ledger.json`（账户、代币余额、授权、交易、ENS、价格、声誉、流动池等，已扩充多用户与多代币）。
-- 修改即可自定义初始状态；默认操作人 `meta.default_actor` = `treasury`；可通过环境变量 `LEDGER_FILE` 指定其他账本。
+- 底层：SQLite 账本（默认 `data/ledger/ledger.db`），首次启动会从 `data/ledger/ledger.json` 迁移初始数据（可用 `LEDGER_FILE` 指向其他种子；`LEDGER_DB` 指定 DB 路径）。
+- 内容：账户、代币余额、授权、交易、ENS、价格、声誉、流动池等，已扩充多用户与多代币。
+- 写操作：支持可选幂等键（idempotency_key）；每次写前自动生成快照到 `data/ledger/snapshots/` 并记录审计表。
+- 默认操作人 `DEFAULT_ACTOR`（缺省 treasury）。
+- 舆情/投毒：本地 RAG 会自动加载 `data/tweets.json`（或 `RAG_TWEET_FILE` 指定的文件）作为舆情语料，可用于投毒或权威文档模拟。
 
 ## 演示路径
 - 正常对话：直接问答，上传截图可触发视觉校验；防御模式可在侧边栏开关。
@@ -78,6 +86,7 @@ streamlit run app.py
   前端环境设置 `MCP_SERVER_URL=http://127.0.0.1:8001/sse`（如需鉴权头，设 `MCP_SERVER_HEADERS='{"Authorization":"Bearer xxx"}'`）。此模式连接复用、无需频繁拉起子进程。
 - 本地 stdio（回退/快速体验）：设置 `MCP_SERVER_CMD="python -m src.simulation.server"`，前端每次调用会临时拉起 MCP 进程。
 - 一键：`bash scripts/quickstart.sh`（如有 `.env` 会自动加载，将 MCP SSE 常驻并启动 Streamlit，Ctrl+C 结束时顺便退出 MCP）。
+ - 健康/就绪探针：启动后可访问 `http://<HEALTH_HOST>:<HEALTH_PORT>/healthz`（存活）和 `/readyz`（就绪），默认 0.0.0.0:8081。
 
 ## 工具一键回归
 运行 `python scripts/test_mcp_tools.py`（会复制临时账本，避免污染原始数据），可快速回归所有 MCP 工具。
@@ -85,6 +94,7 @@ streamlit run app.py
 ## 调试 / 决策链路可视化
 - 侧边栏可勾选 “Show debug messages” 查看发送给 LLM 的原始消息。
 - 每条回复下的“决策过程”折叠面板会展示工具调用 trace 和完整 LLM 调用链（每轮输入/输出、tool_calls）。多轮工具调用上限由 `TOOL_CALL_MAX_ROUNDS` 控制。
+- UI 体验：消息输入区支持草稿保存（表单文本框）、生成时有 spinner 状态提示；工具调用支持超时/重试（见 env 配置）。
 
 ## 发布/部署
 - 本地或服务器直接运行 `streamlit run app.py`，无需额外后端。

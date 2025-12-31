@@ -1,4 +1,3 @@
-import logging
 import os
 import tempfile
 from pathlib import Path
@@ -10,13 +9,14 @@ from src.agent.core import Web3Agent
 from src.attacks.inject_memory import inject_memory
 from src.attacks.poison_rag import poison_rag
 from src.mcp_client.client import make_mcp_tool_caller
+from src.utils.telemetry import configure_logging
 
 
 load_dotenv()
 
-# Lightweight logging (env controllable, default WARNING to reduce noise)
-log_level = os.getenv("LOG_LEVEL", "WARNING").upper()
-logging.basicConfig(level=getattr(logging, log_level, logging.WARNING))
+configure_logging(os.getenv("LOG_LEVEL", "WARNING"))
+import logging
+
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Web3 Agent Demo", page_icon="🛡️", layout="wide")
@@ -131,6 +131,8 @@ def init_state() -> None:
         st.session_state.mode = "chat"
     if "turns" not in st.session_state:
         st.session_state.turns = []
+    if "message_draft" not in st.session_state:
+        st.session_state.message_draft = ""
     if "ledger_path" not in st.session_state:
         st.session_state.ledger_path = os.getenv("LEDGER_FILE") or "data/ledger/ledger.json"
     if "pending_input" not in st.session_state:
@@ -279,7 +281,15 @@ def render_chat(agent: Web3Agent) -> None:
                                 st.code("\n".join(step.get("messages", [])), language="text")
 
     uploaded_image = st.file_uploader("Optional: upload screenshot for vision check", type=["png", "jpg", "jpeg"])
-    user_input = st.chat_input("Ask just like ChatGPT…")
+
+    with st.form(key="chat_form"):
+        draft = st.text_area("输入消息 (Ctrl+Enter 发送)", value=st.session_state.message_draft, height=120, key="message_area")
+        submit = st.form_submit_button("发送", use_container_width=True)
+        if submit and draft.strip():
+            user_input = draft.strip()
+            st.session_state.message_draft = ""  # clear after send
+        else:
+            user_input = None
 
     if st.session_state.pending_input:
         user_input = st.session_state.pending_input
@@ -292,18 +302,19 @@ def render_chat(agent: Web3Agent) -> None:
         logger.info("Running dual agents for input: %s", user_input)
         unsafe_error = None
         safe_error = None
-        try:
-            unsafe_res = st.session_state.agent_unsafe.chat(user_input, image=temp_image_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Unsafe agent chat failed")
-            unsafe_res = None
-            unsafe_error = f"⚠️ 无防御代理异常: {exc}"
-        try:
-            safe_res = st.session_state.agent_safe.chat(user_input, image=temp_image_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Safe agent chat failed")
-            safe_res = None
-            safe_error = f"⚠️ 防御代理异常: {exc}"
+        with st.spinner("生成中，请稍候…"):
+            try:
+                unsafe_res = st.session_state.agent_unsafe.chat(user_input, image=temp_image_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Unsafe agent chat failed")
+                unsafe_res = None
+                unsafe_error = f"⚠️ 无防御代理异常: {exc}"
+            try:
+                safe_res = st.session_state.agent_safe.chat(user_input, image=temp_image_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Safe agent chat failed")
+                safe_res = None
+                safe_error = f"⚠️ 防御代理异常: {exc}"
 
         def build_reply(chat_res) -> str:
             vision_note = ""

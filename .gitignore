@@ -12,6 +12,7 @@ env/
 # OS / editor
 .DS_Store
 Thumbs.db
+.vscode/
 
 # Streamlit / logs
 .streamlit/
@@ -20,6 +21,8 @@ Thumbs.db
 # Data / checkpoints (keep ledger, ignore other large data if added)
 data/**/*.log
 data/**/*.tmp
+data/ledger/ledger.db
+data/ledger/snapshots/
 
 # Packaging / build
 *.egg-info/

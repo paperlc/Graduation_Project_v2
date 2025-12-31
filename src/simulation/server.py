@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import import_module
 from typing import List
 
@@ -39,6 +41,40 @@ TOOL_MODULES: List[str] = [
 logger = logging.getLogger(__name__)
 
 
+def start_health_server(host: str, port: int, ready_flag: dict) -> threading.Thread:
+    """Start a lightweight HTTP server for health/readiness probes."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):  # noqa: D401
+            # Silence default stdout logging
+            return
+
+        def do_GET(self):  # noqa: N802
+            if self.path in ("/healthz", "/livez"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+                return
+            if self.path in ("/readyz", "/ready"):
+                status = 200 if ready_flag.get("ready") else 503
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                payload = b'{"status":"ready"}' if status == 200 else b'{"status":"not-ready"}'
+                self.wfile.write(payload)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+    httpd = HTTPServer((host, port), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    logger.info("Health server started on http://%s:%s (healthz/readyz)", host, port)
+    ready_flag["server"] = httpd
+    return thread
+
+
 def build_server(host: str | None = None, port: int | None = None, sse_path: str | None = None) -> FastMCP:
     logger.info("Building MCP server with ledger and %d tools", len(TOOL_MODULES))
     mcp = FastMCP(
@@ -66,8 +102,16 @@ def run():
     host = os.getenv("MCP_HOST", "0.0.0.0")
     port = int(os.getenv("MCP_PORT", "8001"))
     sse_path = os.getenv("MCP_SSE_PATH", "/sse")
+    health_host = os.getenv("HEALTH_HOST", "0.0.0.0")
+    health_port = int(os.getenv("HEALTH_PORT", "8081"))
+    ready_flag: dict = {"ready": False}
+
+    health_thread = start_health_server(health_host, health_port, ready_flag)
+
     mcp = build_server(host=host, port=port, sse_path=sse_path)
     logger.info("Starting MCP server... transport=%s host=%s port=%s sse_path=%s", transport, host, port, sse_path)
+    ready_flag["ready"] = True
+
     if transport == "stdio":
         mcp.run()
     else:

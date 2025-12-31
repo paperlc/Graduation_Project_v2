@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from .vision import verify_image_consistency
+from src.utils.telemetry import new_trace_id, get_trace_id, set_trace_id, span
 
 
 ToolCaller = Callable[..., Any]
@@ -52,6 +53,7 @@ class ChatResult:
     trace: List[str]
     debug_messages: List[str]
     conversation_log: List[Dict[str, Any]]
+    trace_id: str
 
 
 class Web3Agent:
@@ -94,6 +96,7 @@ class Web3Agent:
         self.rag_remote_api_key = os.getenv("RAG_REMOTE_API_KEY")
         self.rag_enabled = self.rag_provider != "off"
         self.vision_enabled = (os.getenv("VISION_ENABLED", "true").lower() != "false")
+        self.rag_tweet_file = os.getenv("RAG_TWEET_FILE") or (Path(__file__).resolve().parents[2] / "data" / "tweets.json")
 
         embedding_model = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
         embedding_api_key = os.getenv("EMBEDDING_API_KEY") or llm_api_key
@@ -117,6 +120,19 @@ class Web3Agent:
             self.collection = self.chroma_client.get_or_create_collection(
                 name="web3-rag", embedding_function=embedding_function
             )
+            # seed optional tweet corpus if present
+            try:
+                tweet_path = Path(self.rag_tweet_file)
+                if tweet_path.exists():
+                    data = json.loads(tweet_path.read_text(encoding="utf-8"))
+                    tweets = data.get("tweets", [])
+                    if tweets:
+                        ids = [t.get("id") or f"tweet-{i}" for i, t in enumerate(tweets)]
+                        docs = [t.get("text", "") for t in tweets]
+                        self.collection.upsert(ids=ids, documents=docs)
+                        self.logger.info("Loaded %d tweets into RAG collection", len(tweets))
+            except Exception as exc:  # noqa: BLE001
+                self.logger.warning("Failed to load tweet corpus: %s", exc)
         else:
             self.chroma_client = None
 
@@ -331,6 +347,8 @@ class Web3Agent:
 
     def chat(self, user_input: str, image: str | None = None) -> ChatResult:
         """Main chat entrypoint."""
+        trace_id = get_trace_id() or new_trace_id()
+        set_trace_id(trace_id)
         self.logger.info(
             "chat start mode=%s defense=%s input=%s image=%s",
             self.mode,
@@ -383,29 +401,32 @@ class Web3Agent:
 
         max_rounds = int(os.getenv("TOOL_CALL_MAX_ROUNDS", "3"))
         round_idx = 1
-        while True:
-            conversation_log.append({"label": f"LLM call #{round_idx} input", "messages": self._format_messages(messages)})
+        with span("chat", {"trace_id": trace_id, "mode": self.mode, "defense": self.defense_enabled}):
+            while True:
+                conversation_log.append({"label": f"LLM call #{round_idx} input", "messages": self._format_messages(messages)})
 
-            response = self.llm.invoke(messages, tools=self.tools_schema, tool_choice="auto")
-            conversation_log.append(
-                {
-                    "label": f"LLM call #{round_idx} output",
-                    "messages": [f"AIMessage: {getattr(response, 'content', '')}"],
-                    "tool_calls": getattr(response, "tool_calls", None),
-                }
-            )
+                with span(f"llm_call_{round_idx}", {"trace_id": trace_id}):
+                    response = self.llm.invoke(messages, tools=self.tools_schema, tool_choice="auto")
+                conversation_log.append(
+                    {
+                        "label": f"LLM call #{round_idx} output",
+                        "messages": [f"AIMessage: {getattr(response, 'content', '')}"],
+                        "tool_calls": getattr(response, "tool_calls", None),
+                    }
+                )
 
-            if not getattr(response, "tool_calls", None):
-                break
+                if not getattr(response, "tool_calls", None):
+                    break
 
-            if round_idx >= max_rounds:
-                trace.append(f"Max tool call rounds reached ({max_rounds}); stopping.")
-                break
+                if round_idx >= max_rounds:
+                    trace.append(f"Max tool call rounds reached ({max_rounds}); stopping.")
+                    break
 
-            _, tool_messages = self._run_tool_calls(response, trace)
-            messages.extend([response, *tool_messages])
-            self.logger.debug("messages after tools round %d: %s", round_idx, [m.__class__.__name__ for m in messages])
-            round_idx += 1
+                with span(f"tool_exec_round_{round_idx}", {"trace_id": trace_id}):
+                    _, tool_messages = self._run_tool_calls(response, trace)
+                messages.extend([response, *tool_messages])
+                self.logger.debug("messages after tools round %d: %s", round_idx, [m.__class__.__name__ for m in messages])
+                round_idx += 1
 
         reply_text = response.content if isinstance(response, AIMessage) else str(response)
 
@@ -425,4 +446,5 @@ class Web3Agent:
             trace=trace,
             debug_messages=debug_messages,
             conversation_log=conversation_log,
+            trace_id=trace_id,
         )
