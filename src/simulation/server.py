@@ -12,6 +12,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from .ledger import Ledger
+from .services.types import LedgerService
 
 # Tool modules (one file per tool for easy add/remove)
 TOOL_MODULES: List[str] = [
@@ -83,12 +84,12 @@ def build_server(host: str | None = None, port: int | None = None, sse_path: str
         port=port or 8000,
         sse_path=sse_path or "/sse",
     )
-    ledger = Ledger()
+    service: LedgerService = Ledger()
 
     for module_path in TOOL_MODULES:
         module = import_module(module_path)
         if hasattr(module, "register"):
-            module.register(mcp, ledger)
+            module.register(mcp, service)
             logger.info("Registered tool module: %s", module_path)
         else:
             logger.warning("Module %s missing register()", module_path)

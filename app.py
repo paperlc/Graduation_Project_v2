@@ -55,29 +55,25 @@ def load_style() -> None:
         }
         .hero-title { font-size: 26px; font-weight: 600; margin: 0 0 6px 0; }
         .hero-sub { color: var(--muted); margin: 0; }
-        [data-testid="stChatMessage"] {
-            background: var(--panel);
-            border: 1px solid #e5e7eb;
-            border-radius: 16px;
-            padding: 12px 14px;
-            margin-bottom: 12px;
-        }
-        [data-testid="stChatMessageUser"] {
-            background: #f8fafc;
-            border-color: #e5e7eb;
-        }
-        [data-testid="stChatInput"] {
-            border-radius: 14px;
-            border: 1px solid #e5e7eb;
-            background: #ffffff;
+        .page-wrap { max-width: 960px; margin: 0 auto; padding: 8px 24px 200px 24px; }
+        .chat-entry { margin: 12px 0; }
+        .user-row { display: flex; justify-content: flex-end; }
+        .user-bubble {
+            background: #f3f4f6;
             color: var(--text);
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 70%;
+            line-height: 1.6;
         }
+        .ai-row { display: flex; justify-content: flex-start; }
+        .ai-text { max-width: 80%; line-height: 1.7; margin-top: 4px; }
         .user-card, .answer-card {
-            background: var(--panel);
-            border: 1px solid #e5e7eb;
+            background: transparent;
+            border: none;
             border-radius: 12px;
-            padding: 10px 12px;
-            box-shadow: 0 2px 12px rgba(15,23,42,0.06);
+            padding: 6px 0;
+            box-shadow: none;
         }
         .answer-title {
             font-weight: 600;
@@ -107,6 +103,39 @@ def load_style() -> None:
             background: #e5e7eb;
             margin: 16px 0;
         }
+        /* Floating input bar */
+        .input-wrapper {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 200;
+            padding: 12px 24px 16px 24px;
+            background: linear-gradient(180deg, rgba(246,247,251,0), rgba(246,247,251,0.9));
+            display: flex;
+            justify-content: center;
+        }
+        .input-wrapper form[data-testid="stForm"] {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #f3f4f6;
+            border-radius: 999px;
+            padding: 10px 14px;
+            box-shadow: 0 10px 30px rgba(15,23,42,0.12);
+            width: 100%;
+        }
+        .input-wrapper form[data-testid="stForm"] .stTextInput>div>div>input {
+            background: transparent;
+            border: none;
+            outline: none;
+            box-shadow: none;
+        }
+        .input-wrapper form[data-testid="stForm"] button {
+            border-radius: 999px;
+            height: 44px;
+        }
+        body { padding-bottom: 260px; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -133,6 +162,10 @@ def init_state() -> None:
         st.session_state.turns = []
     if "message_draft" not in st.session_state:
         st.session_state.message_draft = ""
+    if "pending_safe" not in st.session_state:
+        st.session_state.pending_safe = False
+    if "pending_image_path" not in st.session_state:
+        st.session_state.pending_image_path = None
     if "ledger_path" not in st.session_state:
         st.session_state.ledger_path = os.getenv("LEDGER_FILE") or "data/ledger/ledger.json"
     if "pending_input" not in st.session_state:
@@ -236,17 +269,28 @@ def render_chat(agent: Web3Agent) -> None:
     st.markdown("### Conversation")
 
     chat_container = st.container()
+    st.markdown('<div class="page-wrap">', unsafe_allow_html=True)
     with chat_container:
         for turn in st.session_state.turns:
-            with st.chat_message("user"):
-                st.markdown(f"<div class='user-card'><div class='answer-title'>Question</div>{turn['user']}</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='chat-entry user-row'><div class='user-bubble'>{turn['user']}</div></div>",
+                unsafe_allow_html=True,
+            )
             col1, col2 = st.columns(2)
             with col1:
-                st.markdown("<div class='answer-card'><div class='answer-title'>Unsafe / attacked</div></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='answer-card' style='border:2px solid #cbd5e1; border-radius:14px; padding:12px;'>"
+                    "<div class='answer-title'>Unsafe / attacked</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
                 if turn.get("unsafe") is None:
                     st.markdown("<div class='answer-card'>Generating…</div>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<div class='answer-card'>{turn['unsafe']}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='answer-card' style='border:2px solid #cbd5e1; border-radius:14px; padding:12px;'>{turn['unsafe']}</div>",
+                        unsafe_allow_html=True,
+                    )
                 if turn.get("unsafe_trace") or turn.get("unsafe_debug"):
                     with st.expander("决策过程（Unsafe）", expanded=False):
                         if turn.get("unsafe_trace"):
@@ -261,11 +305,19 @@ def render_chat(agent: Web3Agent) -> None:
                                     st.caption(f"Tool calls: {step['tool_calls']}")
                                 st.code("\n".join(step.get("messages", [])), language="text")
             with col2:
-                st.markdown("<div class='answer-card'><div class='answer-title'>Defense on</div></div>", unsafe_allow_html=True)
+                st.markdown(
+                    "<div class='answer-card' style='border:2px solid #cbd5e1; border-radius:14px; padding:12px;'>"
+                    "<div class='answer-title'>Defense on</div>"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
                 if turn.get("safe") is None:
                     st.markdown("<div class='answer-card'>Generating…</div>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"<div class='answer-card'>{turn['safe']}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='answer-card' style='border:2px solid #cbd5e1; border-radius:14px; padding:12px;'>{turn['safe']}</div>",
+                        unsafe_allow_html=True,
+                    )
                 if turn.get("safe_trace") or turn.get("safe_debug"):
                     with st.expander("决策过程（Defense）", expanded=False):
                         if turn.get("safe_trace"):
@@ -279,42 +331,35 @@ def render_chat(agent: Web3Agent) -> None:
                                 if step.get("tool_calls"):
                                     st.caption(f"Tool calls: {step['tool_calls']}")
                                 st.code("\n".join(step.get("messages", [])), language="text")
+    st.markdown("</div>", unsafe_allow_html=True)
 
     uploaded_image = st.file_uploader("Optional: upload screenshot for vision check", type=["png", "jpg", "jpeg"])
 
+    # Floating input bar
+    st.markdown('<div class="input-wrapper">', unsafe_allow_html=True)
     with st.form(key="chat_form"):
-        draft = st.text_area("输入消息 (Ctrl+Enter 发送)", value=st.session_state.message_draft, height=120, key="message_area")
+        draft = st.text_input("输入消息 (Enter 发送)", value=st.session_state.message_draft, key="message_input")
         submit = st.form_submit_button("发送", use_container_width=True)
         if submit and draft.strip():
             user_input = draft.strip()
             st.session_state.message_draft = ""  # clear after send
         else:
             user_input = None
+    st.markdown("</div>", unsafe_allow_html=True)
 
     if st.session_state.pending_input:
         user_input = st.session_state.pending_input
-        temp_image_path = st.session_state.pending_image
+        temp_image_path = st.session_state.pending_image_path
 
         attack_payload = st.session_state.get("attack_payload")
-        if attack_payload:
+        if attack_payload and not st.session_state.get("pending_safe"):
             inject_memory(st.session_state.agent_unsafe, attack_payload)
 
         logger.info("Running dual agents for input: %s", user_input)
         unsafe_error = None
         safe_error = None
-        with st.spinner("生成中，请稍候…"):
-            try:
-                unsafe_res = st.session_state.agent_unsafe.chat(user_input, image=temp_image_path)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Unsafe agent chat failed")
-                unsafe_res = None
-                unsafe_error = f"⚠️ 无防御代理异常: {exc}"
-            try:
-                safe_res = st.session_state.agent_safe.chat(user_input, image=temp_image_path)
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Safe agent chat failed")
-                safe_res = None
-                safe_error = f"⚠️ 防御代理异常: {exc}"
+        unsafe_res = None
+        safe_res = None
 
         def build_reply(chat_res) -> str:
             vision_note = ""
@@ -335,24 +380,51 @@ def render_chat(agent: Web3Agent) -> None:
                 reply += f"\n\n[Debug] messages sent to model\n{dbg}"
             return reply
 
-        unsafe_reply = unsafe_error if unsafe_res is None else build_reply(unsafe_res)
-        safe_reply = safe_error if safe_res is None else build_reply(safe_res)
+        # Stage 1: generate unsafe, then rerun for safe
+        if not st.session_state.pending_safe:
+            with st.spinner("生成中（无防御）…"):
+                try:
+                    unsafe_res = st.session_state.agent_unsafe.chat(user_input, image=temp_image_path)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Unsafe agent chat failed")
+                    unsafe_error = f"⚠️ 无防御代理异常: {exc}"
+            st.session_state.turns[-1]["unsafe"] = unsafe_error if unsafe_res is None else (
+                unsafe_error if unsafe_error else build_reply(unsafe_res)
+            )
+            st.session_state.turns[-1]["unsafe_trace"] = getattr(unsafe_res, "trace", None) if unsafe_res else None
+            st.session_state.turns[-1]["unsafe_debug"] = getattr(unsafe_res, "debug_messages", None) if unsafe_res else None
+            st.session_state.turns[-1]["unsafe_flow"] = getattr(unsafe_res, "conversation_log", None) if unsafe_res else None
+            st.session_state.pending_safe = True
+            st.session_state.pending_image_path = temp_image_path
+            st.session_state.pending_input = user_input
+            st.rerun()
 
-        st.session_state.turns[-1]["unsafe"] = unsafe_reply
-        st.session_state.turns[-1]["safe"] = safe_reply
-        st.session_state.turns[-1]["unsafe_trace"] = getattr(unsafe_res, "trace", None) if unsafe_res else None
-        st.session_state.turns[-1]["safe_trace"] = getattr(safe_res, "trace", None) if safe_res else None
-        st.session_state.turns[-1]["unsafe_debug"] = getattr(unsafe_res, "debug_messages", None) if unsafe_res else None
-        st.session_state.turns[-1]["safe_debug"] = getattr(safe_res, "debug_messages", None) if safe_res else None
-        st.session_state.turns[-1]["unsafe_flow"] = getattr(unsafe_res, "conversation_log", None) if unsafe_res else None
-        st.session_state.turns[-1]["safe_flow"] = getattr(safe_res, "conversation_log", None) if safe_res else None
+        # Stage 2: generate safe
+        if st.session_state.pending_safe:
+            with st.spinner("生成中（防御）…"):
+                try:
+                    safe_res = st.session_state.agent_safe.chat(user_input, image=temp_image_path)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Safe agent chat failed")
+                    safe_error = f"⚠️ 防御代理异常: {exc}"
 
-        if temp_image_path:
+        if safe_res is not None or safe_error:
+            safe_reply = safe_error if safe_res is None else build_reply(safe_res)
+            st.session_state.turns[-1]["safe"] = safe_reply
+            st.session_state.turns[-1]["safe_trace"] = getattr(safe_res, "trace", None) if safe_res else None
+            st.session_state.turns[-1]["safe_debug"] = getattr(safe_res, "debug_messages", None) if safe_res else None
+            st.session_state.turns[-1]["safe_flow"] = getattr(safe_res, "conversation_log", None) if safe_res else None
+
+        if temp_image_path and not st.session_state.get("pending_safe"):
             Path(temp_image_path).unlink(missing_ok=True)
 
-        st.session_state.pending_input = None
-        st.session_state.pending_image = None
-        st.rerun()
+        if st.session_state.pending_safe:
+            if temp_image_path:
+                Path(temp_image_path).unlink(missing_ok=True)
+            st.session_state.pending_safe = False
+            st.session_state.pending_input = None
+            st.session_state.pending_image_path = None
+            st.rerun()
 
     if user_input:
         temp_image_path = None
