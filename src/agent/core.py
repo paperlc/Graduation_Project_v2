@@ -69,6 +69,7 @@ class Web3Agent:
         monitored_accounts: Iterable[str] | None = None,
         chroma_path: str | None = None,
         mode: str = "chat",
+        collection_name: str = "web3-rag",
     ):
         self.logger = logging.getLogger(__name__)
         llm_model = model or os.getenv("LLM_MODEL") or "gpt-4o-mini"
@@ -98,6 +99,7 @@ class Web3Agent:
         self.rag_enabled = self.rag_provider != "off"
         self.vision_enabled = (os.getenv("VISION_ENABLED", "true").lower() != "false")
         self.rag_tweet_file = os.getenv("RAG_TWEET_FILE") or (Path(__file__).resolve().parents[2] / "data" / "tweets.json")
+        self.collection_name = collection_name
 
         embedding_model = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
         embedding_api_key = os.getenv("EMBEDDING_API_KEY") or llm_api_key
@@ -119,7 +121,7 @@ class Web3Agent:
                 )
             )
             self.collection = self.chroma_client.get_or_create_collection(
-                name="web3-rag", embedding_function=embedding_function
+                name=self.collection_name, embedding_function=embedding_function
             )
             # seed optional tweet corpus if present
             try:
@@ -164,37 +166,49 @@ class Web3Agent:
     def _build_tools_schema(self) -> List[Dict[str, Any]]:
         """Define tools available for LLM function calling."""
         tool_defs = [
-            ("get_eth_balance", "Query ETH balance for an address.", {"address": "string"}),
-            ("get_token_balance", "Query token balance for an address.", {"address": "string", "token_symbol": "string"}),
-            ("get_transaction_history", "Get recent transactions for an address (for activity only, not ownership).", {"address": "string", "limit": "integer"}),
-            ("get_contract_bytecode", "Fetch contract bytecode.", {"address": "string"}),
-            ("resolve_ens_domain", "Resolve ENS domain to address.", {"domain_name": "string"}),
-            ("get_token_price", "Fetch token price from oracle.", {"token_symbol": "string"}),
-            ("check_address_reputation", "Check reputation/blacklist status.", {"address": "string"}),
-            ("simulate_transaction", "Simulate a transaction.", {"to": "string", "value": "number", "data": "string"}),
-            ("verify_contract_owner", "Return the owner/controller of a contract address (use when asked ‘谁是owner/主人/归属?’).", {"contract_address": "string"}),
-            ("check_token_approval", "Check allowance.", {"owner": "string", "spender": "string"}),
-            ("verify_signature", "Verify a signature.", {"message": "string", "signature": "string", "address": "string"}),
-            ("transfer_eth", "Send ETH.", {"to_address": "string", "amount": "number", "sender": "string"}),
-            ("swap_tokens", "Simulate token swap.", {"token_in": "string", "token_out": "string", "amount": "number", "address": "string"}),
-            ("approve_token", "Approve token spending.", {"spender": "string", "amount": "number", "owner": "string"}),
-            ("revoke_approval", "Revoke token approval.", {"spender": "string", "owner": "string"}),
-            ("get_liquidity_pool_info", "Query liquidity pool info.", {"token_address": "string"}),
-            ("bridge_asset", "Simulate bridge to another chain.", {"token": "string", "target_chain": "string"}),
-            ("stake_tokens", "Simulate staking.", {"protocol": "string", "amount": "number"}),
+            {"name": "get_eth_balance", "description": "Query ETH balance for an address.", "params": {"address": "string"}},
+            {"name": "get_token_balance", "description": "Query token balance for an address.", "params": {"address": "string", "token_symbol": "string"}},
+            {"name": "get_transaction_history", "description": "Get recent transactions for an address (for activity only, not ownership).", "params": {"address": "string", "limit": "integer"}},
+            {"name": "get_contract_bytecode", "description": "Fetch contract bytecode.", "params": {"address": "string"}},
+            {"name": "resolve_ens_domain", "description": "Resolve ENS domain to address.", "params": {"domain_name": "string"}},
+            {"name": "get_token_price", "description": "Fetch token price from oracle.", "params": {"token_symbol": "string"}},
+            {"name": "check_address_reputation", "description": "Check reputation/blacklist status.", "params": {"address": "string"}},
+            {"name": "simulate_transaction", "description": "Simulate a transaction.", "params": {"to": "string", "value": "number", "data": "string"}},
+            {"name": "verify_contract_owner", "description": "Return the owner/controller of a contract address (use when asked ‘谁是owner/主人/归属?’).", "params": {"contract_address": "string"}},
+            {"name": "check_token_approval", "description": "Check allowance.", "params": {"owner": "string", "spender": "string"}},
+            {"name": "verify_signature", "description": "Verify a signature.", "params": {"message": "string", "signature": "string", "address": "string"}},
+            {"name": "transfer_eth", "description": "Send ETH.", "params": {"to_address": "string", "amount": "number", "sender": "string"}, "is_write": True},
+            {"name": "swap_tokens", "description": "Simulate token swap.", "params": {"token_in": "string", "token_out": "string", "amount": "number", "address": "string"}, "is_write": True},
+            {"name": "approve_token", "description": "Approve token spending.", "params": {"spender": "string", "amount": "number", "owner": "string"}, "is_write": True},
+            {"name": "revoke_approval", "description": "Revoke token approval.", "params": {"spender": "string", "owner": "string"}, "is_write": True},
+            {"name": "get_liquidity_pool_info", "description": "Query liquidity pool info.", "params": {"token_address": "string"}},
+            {"name": "bridge_asset", "description": "Simulate bridge to another chain.", "params": {"token": "string", "target_chain": "string"}, "is_write": True},
+            {"name": "stake_tokens", "description": "Simulate staking.", "params": {"protocol": "string", "amount": "number"}, "is_write": True},
         ]
-        tools = []
-        for name, desc, params in tool_defs:
+
+        tools: List[Dict[str, Any]] = []
+        for tool in tool_defs:
+            params = tool["params"]
+            properties = {k: {"type": v} for k, v in params.items()}
+            required = list(params.keys())
+
+            if tool.get("is_write"):
+                # Optional idempotency token so safe/unsafe runs do not double-write.
+                properties["idempotency_key"] = {
+                    "type": "string",
+                    "description": "Idempotency token to deduplicate write operations across runs.",
+                }
+
             tools.append(
                 {
                     "type": "function",
                     "function": {
-                        "name": name,
-                        "description": desc,
+                        "name": tool["name"],
+                        "description": tool["description"],
                         "parameters": {
                             "type": "object",
-                            "properties": {k: {"type": v} for k, v in params.items()},
-                            "required": list(params.keys()),
+                            "properties": properties,
+                            "required": required,
                         },
                     },
                 }
