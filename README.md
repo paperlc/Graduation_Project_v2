@@ -89,10 +89,14 @@ streamlit run app.py
 - 链上操作：侧边栏填写转出方/接收方/金额点击「执行转账」，结果写回 `ledger.json` 并实时展示快照。
 
 ## RAG 语料导入
-准备你的文档到 `data/rag/`（支持 .md/.txt），可选 tweets 语料 `data/tweets.json`。然后运行：
+准备你的文档到 `data/rag/`（支持 .md/.txt），可选 tweets 语料 `data/tweets.json`。为了区分攻击/干净语料，推荐放在：
+- `data/rag/clean/` 正常文档
+- `data/rag/poison/` 投毒文档
+
+默认 ingest 会合并以上目录（含 `data/rag/` 根目录）一起写入集合。运行：
 
 ```bash
-python scripts/ingest_rag.py --src data/rag --tweets data/tweets.json
+python scripts/ingest_rag.py --src data/rag --src-clean data/rag/clean --src-poison data/rag/poison --tweets data/tweets.json
 ```
 
 需要设置的环境变量：

@@ -26,8 +26,10 @@ from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 from dotenv import load_dotenv
 
 
-def load_texts(src: Path) -> List[Tuple[str, str]]:
-    """Load .md/.txt files under src, returning (id, content)."""
+def load_texts(src: Path, label: str | None = None) -> List[Tuple[str, str]]:
+    """Load .md/.txt files under src, returning (id, content) with optional label prefix."""
+    if not src.exists():
+        return []
     docs: List[Tuple[str, str]] = []
     for path in sorted(src.rglob("*")):
         if not path.is_file():
@@ -36,6 +38,8 @@ def load_texts(src: Path) -> List[Tuple[str, str]]:
             continue
         text = path.read_text(encoding="utf-8")
         doc_id = path.relative_to(src).as_posix()
+        if label:
+            doc_id = f"{label}/{doc_id}"
         docs.append((doc_id, text))
     return docs
 
@@ -65,24 +69,44 @@ def ingest(docs: List[Tuple[str, str]], collection_name: str, chroma_dir: str, e
     )
     if RESET_COLLECTIONS:
         try:
-            client.delete_collection(name=collection_name)
-            print(f"[info] Dropped existing collection {collection_name} before ingest.")
+            existing = {c.name for c in client.list_collections()}
+            if collection_name in existing:
+                client.delete_collection(name=collection_name)
+                print(f"[info] Dropped existing collection {collection_name} before ingest.")
         except Exception as exc:  # noqa: BLE001
             print(f"[warn] Failed to drop collection {collection_name}: {exc}")
     collection = client.get_or_create_collection(name=collection_name, embedding_function=embedding_fn)
-    ids = [doc_id for doc_id, _ in docs]
-    texts = [text for _, text in docs]
-    if not ids:
-        print(f"[info] No documents to ingest for {collection_name}")
+
+    # Deduplicate against existing IDs in collection
+    existing_ids: set[str] = set()
+    try:
+        existing = collection.get(limit=1_000_000)
+        existing_ids = set(existing.get("ids") or [])
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Failed to list existing IDs for {collection_name}: {exc}")
+
+    filtered: List[Tuple[str, str]] = []
+    seen_new: set[str] = set()
+    for doc_id, text in docs:
+        if doc_id in existing_ids or doc_id in seen_new:
+            continue
+        seen_new.add(doc_id)
+        filtered.append((doc_id, text))
+
+    if not filtered:
+        print(f"[info] No new documents to ingest for {collection_name}")
         return
-    print(f"[info] Ingesting {len(ids)} docs into collection={collection_name}")
+    ids = [doc_id for doc_id, _ in filtered]
+    texts = [text for _, text in filtered]
+    print(f"[info] Ingesting {len(ids)} new docs into collection={collection_name}")
     collection.upsert(ids=ids, documents=texts)
 
 
 def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="Ingest local documents into Chroma.")
-    parser.add_argument("--src", type=Path, default=Path("data/rag"), help="Directory containing .md/.txt files.")
+    parser.add_argument("--src-clean", type=Path, default=Path("data/rag/clean"), help="Directory for clean docs (required by layout).")
+    parser.add_argument("--src-poison", type=Path, default=Path("data/rag/poison"), help="Directory for poisoned docs (required by layout).")
     parser.add_argument("--tweets", type=Path, default=Path("data/tweets.json"), help="Tweet JSON file to include.")
     parser.add_argument("--skip-tweets", action="store_true", help="Do not ingest tweets.")
     parser.add_argument("--no-reset", action="store_true", help="Do not reset collections before ingest.")
@@ -168,7 +192,10 @@ def main() -> None:
     if emb_fn is None:
         raise SystemExit("No embedding function available: enable EMBEDDING_USE_LOCAL or EMBEDDING_USE_REMOTE with proper config.")
 
-    docs = load_texts(args.src)
+    # Only scan clean/poison folders as per fixed layout
+    docs: List[Tuple[str, str]] = []
+    docs.extend(load_texts(args.src_clean, "clean"))
+    docs.extend(load_texts(args.src_poison, "poison"))
     if not args.skip_tweets:
         docs.extend(load_tweets(args.tweets))
 

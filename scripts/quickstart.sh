@@ -45,7 +45,7 @@ if [ "${RAG_AUTO_INGEST,,}" != "false" ]; then
     rm -rf "${CHROMA_PATH}"/*
   fi
   echo "[rag] Ingesting RAG corpus (data/rag + tweets)..."
-  if ! python scripts/ingest_rag.py --src data/rag --tweets data/tweets.json; then
+  if ! python scripts/ingest_rag.py --src-clean data/rag/clean --src-poison data/rag/poison --tweets data/tweets.json; then
     echo "[warn] RAG ingestion failed; continuing without preloaded RAG."
   fi
 fi

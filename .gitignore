@@ -22,7 +22,13 @@ Thumbs.db
 data/**/*.log
 data/**/*.tmp
 data/ledger/ledger.db
+data/ledger/ledger_safe.db
+data/ledger/ledger_unsafe.db
 data/ledger/snapshots/
+# Chroma persisted store (recreatable via ingest)
+data/chroma/
+# Local RAG corpora outputs (regenerable)
+data/rag/**/.DS_Store
 
 # Packaging / build
 *.egg-info/
@@ -32,3 +38,5 @@ dist/
 # Archives / external refs
 Graduation_Project_v2.zip
 PoisonedRAG-main/
+# Local models cache (HF downloads or manual)
+models/
