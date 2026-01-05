@@ -28,3 +28,7 @@ data/ledger/snapshots/
 *.egg-info/
 build/
 dist/
+
+# Archives / external refs
+Graduation_Project_v2.zip
+PoisonedRAG-main/
