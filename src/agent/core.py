@@ -449,7 +449,12 @@ class Web3Agent:
         if self.defense_enabled and self.vision_enabled and image:
             vision_checked = True
             vision_consistent = self.analyze_image(image, user_input)
-            trace.append(f"Vision check: {'PASS' if vision_consistent else 'FAIL'}")
+            if vision_consistent is True:
+                trace.append("Vision check: PASS")
+            elif vision_consistent is False:
+                trace.append("Vision check: FAIL")
+            else:
+                trace.append("Vision check: ERROR")
 
         rag_context = ""
         if self.rag_enabled:
@@ -476,7 +481,12 @@ class Web3Agent:
 
         vision_note = ""
         if vision_checked:
-            status = "PASS" if vision_consistent else "FAIL"
+            if vision_consistent is True:
+                status = "PASS"
+            elif vision_consistent is False:
+                status = "FAIL"
+            else:
+                status = "ERROR"
             vision_note = f"Vision consistency check: {status}"
 
         system_prompt = self._build_system_prompt(chain_context, rag_context, vision_note)

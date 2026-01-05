@@ -108,6 +108,13 @@ python scripts/ingest_rag.py --src data/rag --src-clean data/rag/clean --src-poi
 
 导入完成后，开启防御模式（或显式开启 RAG），即可在对话中自动检索命中文档。
 
+## 视觉功能使用
+- 开关：`.env` 设置 `VISION_ENABLED=true`；本地轻量一致性检查 `VISION_LOCAL_ENABLED=true`，`VISION_LOCAL_MODEL` 指向已下载的 CLIP/SigLIP 模型（如 `./models/clip-vit-b32`）；阈值 `VISION_LOCAL_THRESHOLD` 可按需调整（越高越严格，默认 0.5）。
+- 多模态问答（可选）：设置 `VISION_REMOTE_ENABLED=true` 并填入 `VISION_API_BASE`/`VISION_API_KEY`/`VISION_MODEL` 指向 OpenAI 兼容的多模态服务（如本地 vLLM/Ollama 部署的 Qwen2-VL/MiniCPM-V）。防御态上传图片时会同时跑远程多模态。
+- 使用方法：前端开启防御，上传图片并输入描述。防御列回复会附带 `[Vision]` 提示：`✅`=一致，`⚠️`=不一致，`❌`=调用失败/出错；勾选 “Show debug messages” 可查看完整 trace。
+- 不上传图片时，视觉模块不会影响纯文本功能；视觉只在防御列执行。
+- 若本地模型不存在会尝试联网拉取，建议提前用 `huggingface-cli` 下载到本地并在 `.env` 填本地路径。
+
 ## MCP 服务模式
 - 常驻 SSE/HTTP（默认推荐）：先启动 MCP 服务  
   ```bash

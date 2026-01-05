@@ -404,16 +404,20 @@ def render_chat(agent: Web3Agent) -> None:
 
         def build_reply(chat_res) -> str:
             reply = chat_res.reply
+            # Always surface vision check status if image was provided
+            if chat_res.vision_checked:
+                if chat_res.vision_consistent is True:
+                    vision_note = "Vision check ✅"
+                elif chat_res.vision_consistent is False:
+                    vision_note = "Vision check ⚠️ (mismatch)"
+                else:
+                    vision_note = "Vision check ❌ (error)"
+                reply += f"\n\n[Vision]\n{vision_note}"
             if st.session_state.get("show_debug"):
-                vision_note = ""
-                if chat_res.vision_checked:
-                    vision_note = "Vision check ✅" if chat_res.vision_consistent else "Vision check ⚠️"
                 if chat_res.chain_context:
                     reply += f"\n\n[Chain snapshot]\n{chat_res.chain_context}"
                 if chat_res.rag_context:
                     reply += f"\n\n[RAG]\n{chat_res.rag_context}"
-                if vision_note:
-                    reply += f"\n\n[Vision]\n{vision_note}"
                 if chat_res.trace:
                     trace_lines = "\n".join(f"- {t}" for t in chat_res.trace)
                     reply += f"\n\n[Trace]\n{trace_lines}"
@@ -485,7 +489,7 @@ def render_chat(agent: Web3Agent) -> None:
             }
         )
         st.session_state.pending_input = user_input
-        st.session_state.pending_image = temp_image_path
+        st.session_state.pending_image_path = temp_image_path
         st.rerun()
 
 
