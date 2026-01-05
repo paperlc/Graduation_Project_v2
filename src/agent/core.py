@@ -104,38 +104,108 @@ class Web3Agent:
         embedding_model = os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
         embedding_api_key = os.getenv("EMBEDDING_API_KEY") or llm_api_key
         embedding_api_base = os.getenv("EMBEDDING_API_BASE") or llm_base_url or "https://api.openai.com/v1"
+        # Embedding strategy switches
+        primary_local_model = os.getenv("EMBEDDING_LOCAL_MODEL")
+        local_model_list = os.getenv("EMBEDDING_LOCAL_MODELS", "")
+        embedding_local_models: List[str] = []
+        if primary_local_model:
+            embedding_local_models.append(primary_local_model)
+        if local_model_list:
+            for item in local_model_list.split(","):
+                name = item.strip()
+                if name and name not in embedding_local_models:
+                    embedding_local_models.append(name)
+        if not embedding_local_models:
+            embedding_local_models = ["sentence-transformers/all-MiniLM-L6-v2"]
+        embedding_use_local = os.getenv("EMBEDDING_USE_LOCAL", "true").lower() != "false"
+        embedding_use_remote = os.getenv("EMBEDDING_USE_REMOTE", "false").lower() == "true"
+        hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
         chroma_dir = chroma_path or os.getenv("CHROMA_PATH")
 
         self.collection = None
-        if self.rag_enabled and self.rag_provider == "local" and embedding_api_key:
-            embedding_function = OpenAIEmbeddingFunction(
-                api_key=embedding_api_key,
-                model_name=embedding_model,
-                api_base=embedding_api_base,
-            )
-            self.chroma_client = chromadb.Client(
-                Settings(
-                    is_persistent=bool(chroma_dir),
-                    persist_directory=chroma_dir,
-                    anonymized_telemetry=False,
+        embedding_function = None
+        if self.rag_enabled and self.rag_provider == "local":
+            if embedding_use_local and embedding_local_models:
+                for candidate in embedding_local_models:
+                    try:
+                        from sentence_transformers import SentenceTransformer
+
+                        model = SentenceTransformer(candidate, token=hf_token)
+
+                        class LocalEmbeddingFunction:
+                            def name(self):
+                                return f"local-st-{candidate}"
+
+                            def _normalize(self, inp) -> List[str]:
+                                if isinstance(inp, str):
+                                    texts = [inp]
+                                elif isinstance(inp, list):
+                                    texts = []
+                                    for item in inp:
+                                        if isinstance(item, str):
+                                            texts.append(item)
+                                        elif isinstance(item, (tuple, list)) and item:
+                                            texts.append(str(item[0]))
+                                        else:
+                                            texts.append(str(item))
+                                else:
+                                    texts = [str(inp)]
+                                return [t for t in texts if t]
+
+                            def __call__(self, input):  # backward compat
+                                texts = self._normalize(input)
+                                return model.encode(texts, convert_to_numpy=True).tolist() if texts else []
+
+                            def embed_documents(self, input):
+                                texts = self._normalize(input)
+                                return model.encode(texts, convert_to_numpy=True).tolist() if texts else []
+
+                            def embed_query(self, input):
+                                texts = self._normalize(input)
+                                return model.encode(texts, convert_to_numpy=True).tolist() if texts else []
+
+                        embedding_function = LocalEmbeddingFunction()
+                        self.logger.info("Using local embedding model: %s", candidate)
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        self.logger.warning("Failed to load local embedding model %s: %s", candidate, exc)
+            if embedding_function is None and embedding_use_remote and embedding_api_key:
+                embedding_function = OpenAIEmbeddingFunction(
+                    api_key=embedding_api_key,
+                    model_name=embedding_model,
+                    api_base=embedding_api_base,
                 )
-            )
-            self.collection = self.chroma_client.get_or_create_collection(
-                name=self.collection_name, embedding_function=embedding_function
-            )
-            # seed optional tweet corpus if present
-            try:
-                tweet_path = Path(self.rag_tweet_file)
-                if tweet_path.exists():
-                    data = json.loads(tweet_path.read_text(encoding="utf-8"))
-                    tweets = data.get("tweets", [])
-                    if tweets:
-                        ids = [t.get("id") or f"tweet-{i}" for i, t in enumerate(tweets)]
-                        docs = [t.get("text", "") for t in tweets]
-                        self.collection.upsert(ids=ids, documents=docs)
-                        self.logger.info("Loaded %d tweets into RAG collection", len(tweets))
-            except Exception as exc:  # noqa: BLE001
-                self.logger.warning("Failed to load tweet corpus: %s", exc)
+                self.logger.info("Using OpenAI-compatible embedding model: %s", embedding_model)
+
+            if embedding_function:
+                self.chroma_client = chromadb.Client(
+                    Settings(
+                        is_persistent=bool(chroma_dir),
+                        persist_directory=chroma_dir,
+                        anonymized_telemetry=False,
+                    )
+                )
+                self.collection = self.chroma_client.get_or_create_collection(
+                    name=self.collection_name, embedding_function=embedding_function
+                )
+                # seed optional tweet corpus if present
+                try:
+                    tweet_path = Path(self.rag_tweet_file)
+                    if tweet_path.exists():
+                        data = json.loads(tweet_path.read_text(encoding="utf-8"))
+                        tweets = data.get("tweets", [])
+                        if tweets:
+                            ids = [t.get("id") or f"tweet-{i}" for i, t in enumerate(tweets)]
+                            docs = [t.get("text", "") for t in tweets]
+                            self.collection.upsert(ids=ids, documents=docs)
+                            self.logger.info("Loaded %d tweets into RAG collection", len(tweets))
+                except Exception as exc:  # noqa: BLE001
+                    self.logger.warning("Failed to load tweet corpus: %s", exc)
+            else:
+                self.logger.warning(
+                    "RAG enabled but no embedding function available (local disabled/unavailable and remote disabled or missing key)"
+                )
+                self.chroma_client = None
         else:
             self.chroma_client = None
 
@@ -382,9 +452,11 @@ class Web3Agent:
             trace.append(f"Vision check: {'PASS' if vision_consistent else 'FAIL'}")
 
         rag_context = ""
-        if self.defense_enabled and self.rag_enabled:
+        if self.rag_enabled:
             rag_context = self._query_rag(user_input)
             trace.append("RAG query executed" if rag_context else "RAG query empty")
+        else:
+            trace.append("RAG skipped (disabled)")
 
         chain_context = ""
         target_accounts: List[str] = []
@@ -400,7 +472,7 @@ class Web3Agent:
             trace.append("Chain snapshot skipped (no accounts or defense off)")
 
         if not self.defense_enabled:
-            trace.append("Defense disabled: no auto chain snapshot/vision/RAG")
+            trace.append("Defense disabled: no auto chain snapshot/vision")
 
         vision_note = ""
         if vision_checked:

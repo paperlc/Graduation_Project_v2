@@ -403,22 +403,23 @@ def render_chat(agent: Web3Agent) -> None:
         safe_res = None
 
         def build_reply(chat_res) -> str:
-            vision_note = ""
-            if chat_res.vision_checked:
-                vision_note = "Vision check ✅" if chat_res.vision_consistent else "Vision check ⚠️"
             reply = chat_res.reply
-            if chat_res.chain_context:
-                reply += f"\n\n[Chain snapshot]\n{chat_res.chain_context}"
-            if chat_res.rag_context:
-                reply += f"\n\n[RAG]\n{chat_res.rag_context}"
-            if vision_note:
-                reply += f"\n\n[Vision]\n{vision_note}"
-            if chat_res.trace:
-                trace_lines = "\n".join(f"- {t}" for t in chat_res.trace)
-                reply += f"\n\n[Trace]\n{trace_lines}"
             if st.session_state.get("show_debug"):
+                vision_note = ""
+                if chat_res.vision_checked:
+                    vision_note = "Vision check ✅" if chat_res.vision_consistent else "Vision check ⚠️"
+                if chat_res.chain_context:
+                    reply += f"\n\n[Chain snapshot]\n{chat_res.chain_context}"
+                if chat_res.rag_context:
+                    reply += f"\n\n[RAG]\n{chat_res.rag_context}"
+                if vision_note:
+                    reply += f"\n\n[Vision]\n{vision_note}"
+                if chat_res.trace:
+                    trace_lines = "\n".join(f"- {t}" for t in chat_res.trace)
+                    reply += f"\n\n[Trace]\n{trace_lines}"
                 dbg = "\n".join(chat_res.debug_messages or [])
-                reply += f"\n\n[Debug] messages sent to model\n{dbg}"
+                if dbg:
+                    reply += f"\n\n[Debug] messages sent to model\n{dbg}"
             return reply
 
         # Stage 1: generate unsafe, then rerun for safe

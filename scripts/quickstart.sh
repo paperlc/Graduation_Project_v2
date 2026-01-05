@@ -16,6 +16,8 @@ if [ -f .env ]; then
 fi
 
 MCP_TRANSPORT="${MCP_TRANSPORT:-sse}"
+RAG_AUTO_INGEST="${RAG_AUTO_INGEST:-true}"
+RAG_RESET_STORAGE="${RAG_RESET_STORAGE:-false}"
 
 # Safe lane
 MCP_HOST_SAFE="${MCP_HOST_SAFE:-127.0.0.1}"
@@ -36,6 +38,17 @@ MCP_SERVER_URL_UNSAFE="${MCP_SERVER_URL_UNSAFE:-http://${MCP_HOST_UNSAFE}:${MCP_
 echo "[info] MCP transport=${MCP_TRANSPORT}"
 echo "[info] SAFE   -> ${MCP_SERVER_URL_SAFE} ledger=${LEDGER_DB_SAFE}"
 echo "[info] UNSAFE -> ${MCP_SERVER_URL_UNSAFE} ledger=${LEDGER_DB_UNSAFE}"
+
+if [ "${RAG_AUTO_INGEST,,}" != "false" ]; then
+  if [ "${RAG_RESET_STORAGE,,}" == "true" ] && [ -n "${CHROMA_PATH:-}" ]; then
+    echo "[rag] Resetting Chroma storage at ${CHROMA_PATH}"
+    rm -rf "${CHROMA_PATH}"/*
+  fi
+  echo "[rag] Ingesting RAG corpus (data/rag + tweets)..."
+  if ! python scripts/ingest_rag.py --src data/rag --tweets data/tweets.json; then
+    echo "[warn] RAG ingestion failed; continuing without preloaded RAG."
+  fi
+fi
 
 echo "[info] Resetting ledger DBs to seed from JSON baseline..."
 mkdir -p "$(dirname "$LEDGER_DB_SAFE")" "$(dirname "$LEDGER_DB_UNSAFE")"

@@ -19,6 +19,7 @@ from .db import connect, load_initial_state
 _DEFAULT_JSON = Path(__file__).resolve().parents[2] / "data" / "ledger" / "ledger.json"
 _DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "ledger" / "ledger.db"
 _SNAPSHOT_DIR = Path(__file__).resolve().parents[2] / "data" / "ledger" / "snapshots"
+_SNAPSHOT_RETENTION = max(0, int(os.getenv("LEDGER_SNAPSHOT_RETENTION", "5")))
 logger = logging.getLogger(__name__)
 
 
@@ -31,6 +32,8 @@ class Ledger:
         self.json_seed = Path(json_seed or os.getenv("LEDGER_FILE") or _DEFAULT_JSON)
         self._lock = asyncio.Lock()
         self._init_db()
+        # Prune any pre-existing snapshots on startup
+        self._prune_snapshots()
 
     def _conn(self) -> sqlite3.Connection:
         return connect(self.db_path)
@@ -69,6 +72,18 @@ class Ledger:
         target = _SNAPSHOT_DIR / f"ledger-{ts}.db"
         shutil.copy(self.db_path, target)
         logger.info("Snapshot saved to %s", target)
+        self._prune_snapshots()
+
+    def _prune_snapshots(self) -> None:
+        """Keep only the latest N snapshots based on modification time."""
+        if _SNAPSHOT_RETENTION <= 0:
+            return
+        try:
+            snapshots = sorted(_SNAPSHOT_DIR.glob("ledger-*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in snapshots[_SNAPSHOT_RETENTION:]:
+                old.unlink(missing_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to prune snapshots: %s", exc)
 
     def _audit(self, conn: sqlite3.Connection, action: str, payload: Dict[str, Any]) -> None:
         conn.execute("INSERT INTO audit(action, payload) VALUES(?, ?)", (action, json.dumps(payload, ensure_ascii=False)))

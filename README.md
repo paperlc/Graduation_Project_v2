@@ -33,11 +33,17 @@ streamlit run app.py
 - 大模型 / Embedding（OpenAI 兼容）
   - `LLM_API_KEY`（可兼容 OPENAI_API_KEY）、`LLM_API_BASE`、`LLM_MODEL`
   - `EMBEDDING_API_KEY`、`EMBEDDING_API_BASE`、`EMBEDDING_MODEL`
+  - `EMBEDDING_LOCAL_MODEL`（可选，单个本地模型名/路径，优先于远程接口，默认 all-MiniLM-L6-v2）
+  - `EMBEDDING_LOCAL_MODELS`（可选，逗号分隔的模型候选列表，按顺序尝试加载）
+  - `EMBEDDING_USE_LOCAL`（默认 true），`EMBEDDING_USE_REMOTE`（默认 false）
 - RAG
   - `RAG_PROVIDER=local|remote|off`（off 时完全跳过 RAG）  
-  - 本地：默认 Chroma；可指定 `CHROMA_PATH` 持久化；无 Embedding Key 时自动跳过。
+  - 本地：默认 Chroma；可指定 `CHROMA_PATH` 持久化；默认启用 `EMBEDDING_USE_LOCAL`（sentence-transformers，本地模型优先，无需 API Key）；若开启 `EMBEDDING_USE_REMOTE` 则回退使用 OpenAI 兼容接口（需 Embedding Key）。
   - 远程：`RAG_REMOTE_URL`（POST {query, top_k}，返回 documents/results）、`RAG_REMOTE_API_KEY`
   - `RAG_TWEET_FILE`（可选，默认 data/tweets.json，作为舆情/推特语料注入本地 RAG，可用于投毒/权威文档模拟）
+  - `RAG_AUTO_INGEST`（默认 true，quickstart 启动时自动执行 `scripts/ingest_rag.py`）
+  - `RAG_RESET_COLLECTIONS`（默认 true，ingest 前清空集合以避免重复；设为 false 或加 `--no-reset` 跳过）
+  - `RAG_RESET_STORAGE`（默认 false，设为 true 时 quickstart 会清空 `CHROMA_PATH` 目录后再 ingest）
 - 视觉
   - `VISION_ENABLED=true|false`；`VISION_API_KEY`（可兼容 LLM/OPENAI）、`VISION_API_BASE`、`VISION_MODEL`（OpenAI 兼容接口即可接入本地或厂商视觉模型）
 - 防御
@@ -49,10 +55,14 @@ streamlit run app.py
 - 账本
   - `LEDGER_FILE`（初始化种子 JSON，可指定其他账本种子）
   - `LEDGER_DB`（SQLite 账本文件路径，默认 data/ledger/ledger.db）
+  - `LEDGER_SNAPSHOT_RETENTION`（默认 5，每次写快照后仅保留最新 N 份）
 - MCP
   - `MCP_SERVER_URL`（默认推荐：常驻 MCP 服务 URL，SSE/HTTP 兼容），`MCP_SERVER_HEADERS`（JSON 头部，可放鉴权）  
   - `MCP_SERVER_CMD`（可选回退：如 `python -m src.simulation.server`，每次调用临时拉起 MCP 进程）
   - `MCP_TRANSPORT`（server 侧，默认 stdio，可设 sse/http/streamable-http）、`MCP_HOST`、`MCP_PORT`、`MCP_SSE_PATH`
+- RAG 集合（可选覆盖默认集合名）
+  - `RAG_COLLECTION_SAFE`（默认 web3-rag-safe）
+  - `RAG_COLLECTION_UNSAFE`（默认 web3-rag-unsafe）
 
 ## RAG / 视觉兼容策略
 - RAG：`RAG_PROVIDER=local` 时使用本地 Chroma；设为 `remote` 时请求 `RAG_REMOTE_URL`（预期返回 JSON 中的 `documents` 或 `results.text`）。  
@@ -77,6 +87,22 @@ streamlit run app.py
 - 正常对话：直接问答，上传截图可触发视觉校验；防御模式可在侧边栏开关。
 - 模拟攻击：点击「内存注入攻击」或「RAG 投毒」，观察回复中的链上快照 / 检索情报变化。
 - 链上操作：侧边栏填写转出方/接收方/金额点击「执行转账」，结果写回 `ledger.json` 并实时展示快照。
+
+## RAG 语料导入
+准备你的文档到 `data/rag/`（支持 .md/.txt），可选 tweets 语料 `data/tweets.json`。然后运行：
+
+```bash
+python scripts/ingest_rag.py --src data/rag --tweets data/tweets.json
+```
+
+需要设置的环境变量：
+- `EMBEDDING_API_KEY`（或复用 `LLM_API_KEY`）
+- `EMBEDDING_API_BASE`（默认同 LLM_API_BASE）
+- `EMBEDDING_MODEL`（默认 text-embedding-3-small）
+- `CHROMA_PATH`（设置后持久化向量库）
+- `RAG_COLLECTION_SAFE` / `RAG_COLLECTION_UNSAFE`（可选，默认 web3-rag-safe/unsafe）
+
+导入完成后，开启防御模式（或显式开启 RAG），即可在对话中自动检索命中文档。
 
 ## MCP 服务模式
 - 常驻 SSE/HTTP（默认推荐）：先启动 MCP 服务  
