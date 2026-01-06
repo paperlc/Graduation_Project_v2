@@ -285,7 +285,7 @@ class Web3Agent:
             )
         return tools
 
-    def analyze_image(self, image_path: str, text_claim: str) -> bool:
+    def analyze_image(self, image_path: str, text_claim: str):
         """Expose the vision module for external callers (e.g., UI)."""
         return verify_image_consistency(text_claim=text_claim, image_path=image_path)
 
@@ -443,18 +443,43 @@ class Web3Agent:
         )
         vision_checked = False
         vision_consistent: Optional[bool] = None
+        vision_score: Optional[float] = None
         trace: List[str] = []
         conversation_log: List[Dict[str, Any]] = []
 
         if self.defense_enabled and self.vision_enabled and image:
             vision_checked = True
-            vision_consistent = self.analyze_image(image, user_input)
+            trace.append(f"Vision input: text={user_input} image={image}")
+            vision_consistent, vision_score, vision_caption = self.analyze_image(image, user_input)
             if vision_consistent is True:
                 trace.append("Vision check: PASS")
             elif vision_consistent is False:
                 trace.append("Vision check: FAIL")
             else:
                 trace.append("Vision check: ERROR")
+            if vision_score is not None:
+                trace.append(f"Vision similarity score: {vision_score:.4f}")
+            if vision_caption:
+                trace.append(f"Vision caption: {vision_caption}")
+            # If vision check fails, intercept and return a warning without tool/RAG
+            if vision_consistent is False:
+                reply_text = "⚠️ 图片与描述不一致，已拦截回答。请上传匹配的图片或修改描述。"
+                debug_messages = [f"{m.__class__.__name__}: {getattr(m, 'content', '')}" for m in []]
+                debug_messages.append(f"AI: {reply_text}")
+                self.memory.add_user_message(user_input)
+                self.memory.add_ai_message(reply_text)
+                return ChatResult(
+                    reply=reply_text,
+                    vision_checked=vision_checked,
+                    vision_consistent=vision_consistent,
+                    chain_context=None,
+                    rag_context=None,
+                    trace=trace,
+                    debug_messages=debug_messages,
+                    conversation_log=[],
+                    trace_id=trace_id,
+                )
+
 
         rag_context = ""
         if self.rag_enabled:

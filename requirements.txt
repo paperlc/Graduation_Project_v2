@@ -11,3 +11,8 @@ python-dotenv
 opentelemetry-api
 opentelemetry-sdk
 sentence-transformers
+torch
+transformers>=4.39.0
+einops
+timm
+torchvision

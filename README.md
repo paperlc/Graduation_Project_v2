@@ -109,10 +109,13 @@ python scripts/ingest_rag.py --src data/rag --src-clean data/rag/clean --src-poi
 导入完成后，开启防御模式（或显式开启 RAG），即可在对话中自动检索命中文档。
 
 ## 视觉功能使用
-- 开关：`.env` 设置 `VISION_ENABLED=true`；本地轻量一致性检查 `VISION_LOCAL_ENABLED=true`，`VISION_LOCAL_MODEL` 指向已下载的 CLIP/SigLIP 模型（如 `./models/clip-vit-b32`）；阈值 `VISION_LOCAL_THRESHOLD` 可按需调整（越高越严格，默认 0.5）。
-- 多模态问答（可选）：设置 `VISION_REMOTE_ENABLED=true` 并填入 `VISION_API_BASE`/`VISION_API_KEY`/`VISION_MODEL` 指向 OpenAI 兼容的多模态服务（如本地 vLLM/Ollama 部署的 Qwen2-VL/MiniCPM-V）。防御态上传图片时会同时跑远程多模态。
+- 开关：`.env` 设置 `VISION_ENABLED=true`；false 时完全跳过视觉一致性检测。
+- 本地 Caption/VLM（默认 Florence-2-base）：`VISION_LOCAL_CAPTION_ENABLED` 控制是否生成图片描述；`VISION_LOCAL_CAPTION_MODEL` 可填 HF 路径或本地目录。
+- 远程文本判定：`VISION_REMOTE_TEXT_API_KEY`、`VISION_REMOTE_TEXT_API_BASE`、`VISION_REMOTE_TEXT_MODEL`，用于将「用户文本 + 本地描述」发送到远程 LLM 判定一致/不一致（纯文本模型即可）。
+- 远程多模态判定：`VISION_REMOTE_MM_ENABLED`，`VISION_REMOTE_MM_API_KEY`、`VISION_REMOTE_MM_API_BASE`、`VISION_REMOTE_MM_MODEL`，直接把图+文送入远程多模态模型判定（不依赖本地 Caption）。
 - 使用方法：前端开启防御，上传图片并输入描述。防御列回复会附带 `[Vision]` 提示：`✅`=一致，`⚠️`=不一致，`❌`=调用失败/出错；勾选 “Show debug messages” 可查看完整 trace。
 - 不上传图片时，视觉模块不会影响纯文本功能；视觉只在防御列执行。
+- 若判定为不一致（⚠️），会直接拦截回答并提示修改图片/描述，不再返回链上/RAG 结果。
 - 若本地模型不存在会尝试联网拉取，建议提前用 `huggingface-cli` 下载到本地并在 `.env` 填本地路径。
 
 ## MCP 服务模式
