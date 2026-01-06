@@ -12,6 +12,12 @@
 - 文本账本：`data/ledger/ledger.json` 保存账户、代币、授权、交易、ENS、价格、声誉、流动池等，不在 Python 中硬编码，可换不同场景的账本文件。
 - 工具解耦：每个 MCP 工具位于 `src/simulation/tools/` 独立文件，方便增删；`src/simulation/server.py` 动态注册。
 
+## 实现现状与已知限制
+- 前端：无流式输出，移动端适配和交互动效基础；调试视图为文本列表，未结构化分区。
+- Agent/RAG：本地 Chroma 检索，未做重排/去重/可信度过滤；投毒检测仅依赖安全/不安全分库，无自动风险标注。
+- 视觉：本地 Florence Caption + 远程文本判定已通路；远程多模态默认关闭且缺少频控/回退策略。
+- 运维：无容器化/CI/健康探针；日志和指标仅基础打印，未对接监控。
+
 ## 快速开始
 1) 安装依赖  
 ```bash
@@ -42,10 +48,13 @@ streamlit run app.py
   - 远程：`RAG_REMOTE_URL`（POST {query, top_k}，返回 documents/results）、`RAG_REMOTE_API_KEY`
   - `RAG_TWEET_FILE`（可选，默认 data/tweets.json，作为舆情/推特语料注入本地 RAG，可用于投毒/权威文档模拟）
   - `RAG_AUTO_INGEST`（默认 true，quickstart 启动时自动执行 `scripts/ingest_rag.py`）
-  - `RAG_RESET_COLLECTIONS`（默认 true，ingest 前清空集合以避免重复；设为 false 或加 `--no-reset` 跳过）
+  - `RAG_RESET_COLLECTIONS`（默认 false，若设为 true 则 ingest 前清空集合）
   - `RAG_RESET_STORAGE`（默认 false，设为 true 时 quickstart 会清空 `CHROMA_PATH` 目录后再 ingest）
 - 视觉
-  - `VISION_ENABLED=true|false`；`VISION_API_KEY`（可兼容 LLM/OPENAI）、`VISION_API_BASE`、`VISION_MODEL`（OpenAI 兼容接口即可接入本地或厂商视觉模型）
+  - `VISION_ENABLED=true|false` 控制是否启用视觉检测。
+  - 本地 Caption/VLM：`VISION_LOCAL_CAPTION_ENABLED`（默认 true），`VISION_LOCAL_CAPTION_MODEL`（默认 Florence-2-base，本地路径或 HF 模型）。生成图片描述。
+  - 远程文本判定：`VISION_REMOTE_TEXT_API_KEY`、`VISION_REMOTE_TEXT_API_BASE`、`VISION_REMOTE_TEXT_MODEL`（默认 gpt-4o-mini）。将“用户文本+本地描述”发给远程 LLM 判定一致/不一致。
+  - 远程多模态判定：`VISION_REMOTE_MM_ENABLED`（默认 false）、`VISION_REMOTE_MM_API_KEY`、`VISION_REMOTE_MM_API_BASE`、`VISION_REMOTE_MM_MODEL`。直接将图+文发给远程多模态模型判定（不依赖本地 Caption）。
 - 防御
   - `DEFENSE_DEFAULT_ON=true|false` 控制默认是否启用防御（UI 可再次切换）
 - 调试/多轮工具
@@ -66,7 +75,7 @@ streamlit run app.py
 
 ## RAG / 视觉兼容策略
 - RAG：`RAG_PROVIDER=local` 时使用本地 Chroma；设为 `remote` 时请求 `RAG_REMOTE_URL`（预期返回 JSON 中的 `documents` 或 `results.text`）。  
-- 视觉：走 OpenAI 兼容协议，可将 `VISION_API_BASE` 指向本地服务或厂商网关；无键或错误将返回“未通过”以避免盲信图片。
+- 视觉：两条路径均走 OpenAI 兼容协议，可将 `VISION_REMOTE_TEXT_API_BASE` 或 `VISION_REMOTE_MM_API_BASE` 指向本地服务或厂商网关；未配置对应 Key/Base 时跳过该路径。
 
 ## 链上工具清单（MCP，文本账本驱动）
 - 目录：`src/simulation/tools/`（单文件单工具，可自由增删）
