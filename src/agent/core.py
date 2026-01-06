@@ -449,6 +449,7 @@ class Web3Agent:
 
         if self.defense_enabled and self.vision_enabled and image:
             vision_checked = True
+            pipeline_mode = (os.getenv("VISION_PIPELINE_MODE") or "caption_text").lower()
             trace.append(f"Vision input: text={user_input} image={image}")
             vision_consistent, vision_score, vision_caption = self.analyze_image(image, user_input)
             if vision_consistent is True:
@@ -461,6 +462,12 @@ class Web3Agent:
                 trace.append(f"Vision similarity score: {vision_score:.4f}")
             if vision_caption:
                 trace.append(f"Vision caption: {vision_caption}")
+            trace.append(f"Vision pipeline mode={pipeline_mode}")
+            trace.append(
+                "Vision models (text/mm): "
+                f"{os.getenv('VISION_REMOTE_TEXT_MODEL') or 'n/a'} / "
+                f"{os.getenv('VISION_REMOTE_MM_MODEL') or 'n/a'}"
+            )
             # If vision check fails, intercept and return a warning without tool/RAG
             if vision_consistent is False:
                 reply_text = "⚠️ 图片与描述不一致，已拦截回答。请上传匹配的图片或修改描述。"

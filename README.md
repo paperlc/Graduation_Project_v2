@@ -48,13 +48,13 @@ streamlit run app.py
   - 远程：`RAG_REMOTE_URL`（POST {query, top_k}，返回 documents/results）、`RAG_REMOTE_API_KEY`
   - `RAG_TWEET_FILE`（可选，默认 data/tweets.json，作为舆情/推特语料注入本地 RAG，可用于投毒/权威文档模拟）
   - `RAG_AUTO_INGEST`（默认 true，quickstart 启动时自动执行 `scripts/ingest_rag.py`）
-  - `RAG_RESET_COLLECTIONS`（默认 false，若设为 true 则 ingest 前清空集合）
-  - `RAG_RESET_STORAGE`（默认 false，设为 true 时 quickstart 会清空 `CHROMA_PATH` 目录后再 ingest）
+- `RAG_RESET_COLLECTIONS`（默认 false，若设为 true 则 ingest 前清空集合）
+- `RAG_RESET_STORAGE`（默认 false，设为 true 时 quickstart 会清空 `CHROMA_PATH` 目录后再 ingest）
 - 视觉
   - `VISION_ENABLED=true|false` 控制是否启用视觉检测。
-  - 本地 Caption/VLM：`VISION_LOCAL_CAPTION_ENABLED`（默认 true），`VISION_LOCAL_CAPTION_MODEL`（默认 Florence-2-base，本地路径或 HF 模型）。生成图片描述。
+  - 本地 Caption/VLM：`VISION_LOCAL_CAPTION_MODEL`（默认 Florence-2-base，本地路径或 HF 模型，caption_text 模式下必跑）。
   - 远程文本判定：`VISION_REMOTE_TEXT_API_KEY`、`VISION_REMOTE_TEXT_API_BASE`、`VISION_REMOTE_TEXT_MODEL`（默认 gpt-4o-mini）。将“用户文本+本地描述”发给远程 LLM 判定一致/不一致。
-  - 远程多模态判定：`VISION_REMOTE_MM_ENABLED`（默认 false）、`VISION_REMOTE_MM_API_KEY`、`VISION_REMOTE_MM_API_BASE`、`VISION_REMOTE_MM_MODEL`。直接将图+文发给远程多模态模型判定（不依赖本地 Caption）。
+  - 远程多模态判定：`VISION_REMOTE_MM_API_KEY`、`VISION_REMOTE_MM_API_BASE`、`VISION_REMOTE_MM_MODEL`。直接将图+文发给远程多模态模型判定（不依赖本地 Caption）。
 - 防御
   - `DEFENSE_DEFAULT_ON=true|false` 控制默认是否启用防御（UI 可再次切换）
 - 调试/多轮工具
@@ -117,11 +117,11 @@ python scripts/ingest_rag.py --src data/rag --src-clean data/rag/clean --src-poi
 
 导入完成后，开启防御模式（或显式开启 RAG），即可在对话中自动检索命中文档。
 
-## 视觉功能使用
-- 开关：`.env` 设置 `VISION_ENABLED=true`；false 时完全跳过视觉一致性检测。
-- 本地 Caption/VLM（默认 Florence-2-base）：`VISION_LOCAL_CAPTION_ENABLED` 控制是否生成图片描述；`VISION_LOCAL_CAPTION_MODEL` 可填 HF 路径或本地目录。
-- 远程文本判定：`VISION_REMOTE_TEXT_API_KEY`、`VISION_REMOTE_TEXT_API_BASE`、`VISION_REMOTE_TEXT_MODEL`，用于将「用户文本 + 本地描述」发送到远程 LLM 判定一致/不一致（纯文本模型即可）。
-- 远程多模态判定：`VISION_REMOTE_MM_ENABLED`，`VISION_REMOTE_MM_API_KEY`、`VISION_REMOTE_MM_API_BASE`、`VISION_REMOTE_MM_MODEL`，直接把图+文送入远程多模态模型判定（不依赖本地 Caption）。
+- 视觉功能使用（模式可选：caption_text / multimodal）
+  - 开关：`.env` 设置 `VISION_ENABLED=true`；`VISION_PIPELINE_MODE=caption_text`（默认，本地 Florence Caption + 远程文本判定）或 `multimodal`（直接远程多模态判定，不走本地 Caption）。
+  - 本地 Caption/VLM（默认 Florence-2-base）：`VISION_LOCAL_CAPTION_MODEL` 可填 HF 路径或本地目录，caption_text 模式下必跑。
+  - 远程文本判定：`VISION_REMOTE_TEXT_API_KEY`、`VISION_REMOTE_TEXT_API_BASE`、`VISION_REMOTE_TEXT_MODEL`，用于将「用户文本 + 本地描述」发送到远程 LLM 判定一致/不一致。
+  - 远程多模态判定（默认支持 glm-4v-flash/智谱）：`VISION_REMOTE_MM_API_KEY`，`VISION_REMOTE_MM_API_BASE`（若需），`VISION_REMOTE_MM_MODEL`（默认 glm-4v-flash），直接把图+文送入多模态模型判定，减少 Caption 误差。
 - 使用方法：前端开启防御，上传图片并输入描述。防御列回复会附带 `[Vision]` 提示：`✅`=一致，`⚠️`=不一致，`❌`=调用失败/出错；勾选 “Show debug messages” 可查看完整 trace。
 - 不上传图片时，视觉模块不会影响纯文本功能；视觉只在防御列执行。
 - 若判定为不一致（⚠️），会直接拦截回答并提示修改图片/描述，不再返回链上/RAG 结果。

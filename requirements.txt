@@ -16,3 +16,4 @@ transformers>=4.39.0
 einops
 timm
 torchvision
+zhipuai

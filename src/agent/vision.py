@@ -32,6 +32,7 @@ def _llm_text_consistency(text_claim: str, caption: str) -> Optional[bool]:
     if not api_key or not base_url:
         logger.warning("LLM text consistency skipped: missing VISION_REMOTE_TEXT_API_KEY or VISION_REMOTE_TEXT_API_BASE")
         return None
+    logger.info("LLM text consistency request model=%s claim=%.80s caption=%.80s", model_name, text_claim, caption)
     client = OpenAI(api_key=api_key, base_url=base_url)
     try:
         resp = client.chat.completions.create(
@@ -88,7 +89,7 @@ def _caption_consistency(
                 attn_implementation="eager",
                 low_cpu_mem_usage=False,
                 dtype="float32",
-            ).eval()
+            ).to("cpu").eval()
             _FLORENCE_PROCESSOR = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
             _FLORENCE_NAME = model_path
             logger.info("Loaded caption model: %s", model_path)
@@ -97,6 +98,7 @@ def _caption_consistency(
         image = Image.open(image_path).convert("RGB")
         prompt = "<MORE_DETAILED_CAPTION>"
         inputs = _FLORENCE_PROCESSOR(text=prompt, images=image, return_tensors="pt")
+        inputs = {k: v.to("cpu") for k, v in inputs.items()}
         with torch.no_grad():
             generated_ids = _FLORENCE_MODEL.generate(
                 input_ids=inputs["input_ids"],
@@ -128,61 +130,70 @@ def verify_image_consistency(
     - (None, None, caption/None): call/processing failed or not executed
     """
     logger.info("vision input text=%s image=%s", text_claim, image_path)
-    # Optional caption-based check (Florence-2 or similar)
-    caption_enabled = os.getenv("VISION_LOCAL_CAPTION_ENABLED", "false").lower() == "true"
-    if caption_enabled:
+    mode = (os.getenv("VISION_PIPELINE_MODE") or "caption_text").lower()
+
+    if mode == "caption_text":
         caption_model = os.getenv("VISION_LOCAL_CAPTION_MODEL") or "microsoft/Florence-2-base"
         caption_result, caption_score, caption_text = _caption_consistency(text_claim, image_path, caption_model)
         if caption_result is not None:
             return bool(caption_result), caption_score, caption_text
         return None, None, caption_text
 
-    # Optional remote multimodal QA/description (OpenAI-compatible)
-    use_remote = os.getenv("VISION_REMOTE_MM_ENABLED", "false").lower() == "true"
-    if not use_remote:
-        return None, None, None
+    if mode == "multimodal":
+        return _remote_multimodal_consistency(text_claim, image_path)
 
+    logger.warning("Unknown VISION_PIPELINE_MODE=%s", mode)
+    return None, None, None
+
+
+def _remote_multimodal_consistency(text_claim: str, image_path: str) -> tuple[Optional[bool], Optional[float], Optional[str]]:
+    """Use remote multimodal model (glm-4v-flash) to judge consistency."""
     api_key = os.getenv("VISION_REMOTE_MM_API_KEY")
-    base_url = os.getenv("VISION_REMOTE_MM_API_BASE")
-    model_name = model or os.getenv("VISION_REMOTE_MM_MODEL") or "gpt-4o-mini"
-    if not api_key or not base_url:
-        logger.warning("Vision remote multimodal skipped: missing VISION_REMOTE_MM_API_KEY or VISION_REMOTE_MM_API_BASE")
+    model_name = os.getenv("VISION_REMOTE_MM_MODEL") or "glm-4v-flash"
+    if not api_key:
+        logger.warning("Vision remote multimodal skipped: missing VISION_REMOTE_MM_API_KEY")
+        return None, None, None
+    try:
+        from zhipuai import ZhipuAI  # type: ignore
+        import json
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Vision remote multimodal import failed: %s", exc)
         return None, None, None
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = ZhipuAI(api_key=api_key)
     encoded_image = _encode_image(image_path)
+    prompt = (
+        "你是一名严格的 Web3 安全审计员。任务：检测图文不一致的欺诈行为。\n"
+        "步骤：1) 独立分析图表趋势/关键数值；2) 将图表事实与文本声明比对；\n"
+        "若图表趋势与声明相反或严重不符，判定为不一致（INCONSISTENT）。\n"
+        "请仅以 JSON 格式返回结果，不要包含 Markdown：\n"
+        '{\"is_consistent\": bool, \"chart_trend\": \"string\", \"reason\": \"string\"}'
+    )
+    logger.info("Vision remote multimodal request model=%s claim=%.80s image=%s", model_name, text_claim, image_path)
 
     try:
-        logger.info("vision check start model=%s image=%s", model_name, image_path)
-        response = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model=model_name,
             messages=[
                 {
-                    "role": "system",
-                    "content": (
-                        "You are a security checker looking for image-text mismatches. "
-                        "Reply with exactly one word: CONSISTENT if the image matches the text, "
-                        "otherwise INCONSISTENT."
-                    ),
-                },
-                {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"Text claim: {text_claim}"},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{encoded_image}"},
-                        },
+                        {"type": "text", "text": f"{prompt}\n\n文本声明: \"{text_claim}\""},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded_image}"}},
                     ],
-                },
+                }
             ],
             temperature=0,
         )
+        raw_content = resp.choices[0].message.content
+        logger.info("Vision remote multimodal raw content=%.200s", raw_content)
+        clean = raw_content.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean)
+        is_consistent = bool(data.get("is_consistent"))
+        chart_trend = data.get("chart_trend")
+        reason = data.get("reason")
+        logger.info("Vision remote multimodal result=%s trend=%s reason=%s", is_consistent, chart_trend, reason)
+        return is_consistent, None, chart_trend
     except Exception as exc:  # noqa: BLE001
-        logger.exception("vision check failed: %s", exc)
-        return None, None
-
-    result_text = response.choices[0].message.content.strip().upper()
-    is_consistent = result_text.startswith("CONSISTENT")
-    logger.info("vision check result=%s", result_text)
-    return is_consistent, None, None
+        logger.exception("Vision remote multimodal check failed: %s", exc)
+        return None, None, None
