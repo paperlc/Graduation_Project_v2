@@ -7,8 +7,8 @@
 - 流程：前端发起对话 → Web3Agent 构造系统提示与上下文 → LLM function calling → MCP 工具执行 → 汇总回复。防御态自动加链上快照/RAG/视觉；无防御态可被攻击（内存注入、RAG 投毒）。
 
 ## 前端（app.py）
-- 实现：Streamlit UI，双列展示安全/无防御回复；悬浮输入条，消息样式（用户气泡右侧，AI 文本左对齐无气泡）；侧边栏模式/防御开关、攻击面板、手动工具调用、链上快照、调试开关；SAFE/UNSAFE 两个 MCP 客户端绑定不同账本。
-- 不足：UI 动效与体验基础（无流式输出、发送状态有限）；滚动/固定用 CSS hack，移动端适配不足；调试视图可再结构化；安全/无防御仍共用同一 LLM 配置（如需彻底隔离可分配不同模型/Key）。
+- 实现：Streamlit Chat UI（`st.chat_message`/`st.chat_input`），每轮对话在同一条 assistant 消息里用 Tabs 展示 SAFE(Defense)/UNSAFE(attacked) 回复；侧边栏提供会话列表、模式/防御开关、攻击面板、手动工具调用、链上快照、调试开关；SAFE/UNSAFE 两个 MCP 客户端绑定不同账本。
+- 不足：后端仍是非 token 级流式（仅做 UI 打字机模拟）；移动端适配仍可继续优化；安全/无防御仍共用同一 LLM 配置（如需彻底隔离可分配不同模型/Key）。
 
 ## Web3Agent（src/agent/core.py）
 - 实现：LangChain ChatOpenAI；系统提示强调“先答案后依据，链上快照视作真实主网”；工具多轮调用，`TOOL_CALL_MAX_ROUNDS` 控制；写工具支持 `idempotency_key` 防双写；防御态自动链上快照/RAG/视觉；顾问/对话模式提示差异；本地 SimpleChatMemory；本地 Chroma RAG（集合 safe/unsafe 分离，自动加载 tweets）；视觉校验占位；trace_id/span/JSON 日志。

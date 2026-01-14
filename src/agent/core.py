@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import chromadb
 import requests
@@ -75,6 +75,11 @@ class Web3Agent:
         llm_model = model or os.getenv("LLM_MODEL") or "gpt-4o-mini"
         llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
         llm_base_url = os.getenv("LLM_API_BASE") or os.getenv("OPENAI_BASE_URL")
+        self.llm_model = llm_model
+        self.llm_api_key = llm_api_key
+        self.llm_base_url = llm_base_url
+        self.llm_temperature = temperature
+        self._openai_client = None
 
         self.llm = ChatOpenAI(
             model=llm_model,
@@ -373,6 +378,215 @@ class Web3Agent:
             formatted.append(f"{role}: {content}")
         return formatted
 
+    def _should_stream(self, stream: Optional[bool]) -> bool:
+        if stream is not None:
+            return bool(stream)
+        return os.getenv("LLM_STREAM", "false").lower() == "true"
+
+    def _get_openai_client(self):
+        if self._openai_client is not None:
+            return self._openai_client
+        try:
+            from openai import OpenAI  # type: ignore
+
+            kwargs: Dict[str, Any] = {}
+            if self.llm_api_key:
+                kwargs["api_key"] = self.llm_api_key
+            if self.llm_base_url:
+                kwargs["base_url"] = self.llm_base_url
+            self._openai_client = OpenAI(**kwargs)
+            return self._openai_client
+        except Exception:  # noqa: BLE001
+            self._openai_client = None
+            return None
+
+    def _to_openai_messages(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+        """Convert LangChain messages to OpenAI-compatible message dicts."""
+        out: List[Dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, SystemMessage):
+                out.append({"role": "system", "content": str(msg.content)})
+            elif isinstance(msg, HumanMessage):
+                out.append({"role": "user", "content": str(msg.content)})
+            elif isinstance(msg, ToolMessage):
+                out.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": str(msg.content)})
+            elif isinstance(msg, AIMessage):
+                payload: Dict[str, Any] = {"role": "assistant", "content": str(getattr(msg, "content", "") or "")}
+                tool_calls = getattr(msg, "tool_calls", None) or []
+                if tool_calls:
+                    converted = []
+                    for idx, call in enumerate(tool_calls):
+                        call_id = call.get("id") or f"call_{idx}"
+                        name = call.get("name") or ""
+                        args = call.get("args") or {}
+                        converted.append(
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+                            }
+                        )
+                    payload["tool_calls"] = converted
+                out.append(payload)
+            else:
+                out.append({"role": "user", "content": str(getattr(msg, "content", msg))})
+        return out
+
+    def _format_openai_messages(self, messages: List[Dict[str, Any]]) -> List[str]:
+        formatted: List[str] = []
+        for msg in messages:
+            role = msg.get("role") or "unknown"
+            content = msg.get("content") or ""
+            if msg.get("tool_calls"):
+                content = f"tool_calls={msg.get('tool_calls')}"
+            if role == "tool":
+                content = f"tool_call_id={msg.get('tool_call_id')} content={content}"
+            formatted.append(f"{role}: {content}")
+        return formatted
+
+    def _parse_openai_tool_calls(self, tool_calls: Any) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Parse OpenAI tool_calls into:
+        - internal format: [{id,name,args}]
+        - raw OpenAI-ish format: [{id,type,function:{name,arguments}}]
+        """
+        internal: List[Dict[str, Any]] = []
+        raw: List[Dict[str, Any]] = []
+        if not tool_calls:
+            return internal, raw
+
+        for idx, tc in enumerate(tool_calls):
+            if isinstance(tc, dict):
+                tc_id = tc.get("id") or f"call_{idx}"
+                tc_type = tc.get("type") or "function"
+                func = tc.get("function") or {}
+                name = func.get("name") or tc.get("name") or ""
+                args_str = func.get("arguments") or tc.get("arguments") or ""
+            else:
+                tc_id = getattr(tc, "id", None) or f"call_{idx}"
+                tc_type = getattr(tc, "type", None) or "function"
+                func = getattr(tc, "function", None) or {}
+                name = getattr(func, "name", None) or getattr(tc, "name", None) or ""
+                args_str = getattr(func, "arguments", None) or getattr(tc, "arguments", None) or ""
+
+            if args_str is None:
+                args_str = ""
+            if not isinstance(args_str, str):
+                try:
+                    args_str = json.dumps(args_str, ensure_ascii=False)
+                except Exception:  # noqa: BLE001
+                    args_str = str(args_str)
+
+            args: Dict[str, Any] = {}
+            if args_str:
+                try:
+                    args = json.loads(args_str)
+                except Exception:  # noqa: BLE001
+                    args = {}
+
+            raw.append({"id": tc_id, "type": tc_type, "function": {"name": name, "arguments": args_str}})
+            internal.append({"id": tc_id, "name": name, "args": args})
+
+        return internal, raw
+
+    def _openai_stream_once(
+        self,
+        messages: List[Dict[str, Any]],
+        on_token: Optional[Callable[[str], None]],
+        tool_choice: str = "auto",
+    ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        One streamed ChatCompletion call.
+        Returns: (content, internal_tool_calls, raw_tool_calls)
+        """
+        client = self._get_openai_client()
+        if client is None:
+            raise RuntimeError("OpenAI client is not available for streaming.")
+
+        timeout_s = float(os.getenv("LLM_TIMEOUT", "60"))
+        stream = client.chat.completions.create(
+            model=self.llm_model,
+            temperature=self.llm_temperature,
+            messages=messages,
+            tools=self.tools_schema,
+            tool_choice=tool_choice,
+            stream=True,
+            timeout=timeout_s,
+        )
+
+        content_parts: List[str] = []
+        tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+
+        for chunk in stream:
+            try:
+                choice = chunk.choices[0]
+            except Exception:  # noqa: BLE001
+                continue
+
+            delta = getattr(choice, "delta", None) or {}
+            delta_content = getattr(delta, "content", None) if not isinstance(delta, dict) else delta.get("content")
+            if delta_content:
+                token = str(delta_content)
+                content_parts.append(token)
+                if on_token:
+                    on_token(token)
+
+            delta_tool_calls = getattr(delta, "tool_calls", None) if not isinstance(delta, dict) else delta.get("tool_calls")
+            if not delta_tool_calls:
+                continue
+
+            for tc in delta_tool_calls:
+                if isinstance(tc, dict):
+                    idx = tc.get("index")
+                    tc_id = tc.get("id")
+                    tc_type = tc.get("type") or "function"
+                    func = tc.get("function") or {}
+                    name = func.get("name")
+                    arguments = func.get("arguments")
+                else:
+                    idx = getattr(tc, "index", None)
+                    tc_id = getattr(tc, "id", None)
+                    tc_type = getattr(tc, "type", None) or "function"
+                    func = getattr(tc, "function", None) or {}
+                    name = getattr(func, "name", None)
+                    arguments = getattr(func, "arguments", None)
+
+                if idx is None:
+                    idx = len(tool_calls_acc)
+                entry = tool_calls_acc.setdefault(
+                    int(idx),
+                    {"id": "", "type": tc_type, "function": {"name": "", "arguments": ""}},
+                )
+                if tc_id:
+                    entry["id"] = tc_id
+                if name:
+                    entry["function"]["name"] = name
+                if arguments:
+                    entry["function"]["arguments"] += str(arguments)
+
+        content = "".join(content_parts)
+        raw_tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else []
+        internal_tool_calls, raw_tool_calls = self._parse_openai_tool_calls(raw_tool_calls)
+        return content, internal_tool_calls, raw_tool_calls
+
+    def _run_openai_tool_calls(self, tool_calls: List[Dict[str, Any]], trace: List[str]) -> List[Dict[str, Any]]:
+        tool_messages: List[Dict[str, Any]] = []
+        for call in tool_calls:
+            name = call.get("name")
+            args = call.get("args") or {}
+            call_id = call.get("id") or ""
+            try:
+                result = self._call_tool(name, **args)
+                result_str = json.dumps(result, ensure_ascii=False)
+                trace.append(f"LLM tool {name}({args}) -> {result_str}")
+                self.logger.info("tool_call success: %s args=%s result=%s", name, args, result_str)
+            except Exception as exc:  # noqa: BLE001
+                result_str = f"call {name} failed: {exc}"
+                trace.append(result_str)
+                self.logger.exception("tool_call failed: %s args=%s", name, args)
+            tool_messages.append({"role": "tool", "tool_call_id": call_id, "content": result_str})
+        return tool_messages
+
     def _extract_accounts_from_text(self, text: str) -> List[str]:
         text_lower = text.lower()
         hits = [acc for acc in self.monitored_accounts if acc in text_lower]
@@ -430,7 +644,14 @@ class Web3Agent:
             return f"{base}\n\n{context_blob}"
         return base
 
-    def chat(self, user_input: str, image: str | None = None) -> ChatResult:
+    def chat(
+        self,
+        user_input: str,
+        image: str | None = None,
+        *,
+        stream: Optional[bool] = None,
+        on_token: Optional[Callable[[str], None]] = None,
+    ) -> ChatResult:
         """Main chat entrypoint."""
         trace_id = get_trace_id() or new_trace_id()
         set_trace_id(trace_id)
@@ -530,37 +751,88 @@ class Web3Agent:
 
         max_rounds = int(os.getenv("TOOL_CALL_MAX_ROUNDS", "3"))
         round_idx = 1
-        with span("chat", {"trace_id": trace_id, "mode": self.mode, "defense": self.defense_enabled}):
-            while True:
-                conversation_log.append({"label": f"LLM call #{round_idx} input", "messages": self._format_messages(messages)})
+        response: Any = None
 
-                with span(f"llm_call_{round_idx}", {"trace_id": trace_id}):
-                    response = self.llm.invoke(messages, tools=self.tools_schema, tool_choice="auto")
-                conversation_log.append(
-                    {
-                        "label": f"LLM call #{round_idx} output",
-                        "messages": [f"AIMessage: {getattr(response, 'content', '')}"],
-                        "tool_calls": getattr(response, "tool_calls", None),
-                    }
-                )
+        # Prefer OpenAI-native streaming path when enabled; fall back to LangChain invoke on errors.
+        use_stream = self._should_stream(stream) and on_token is not None
+        if use_stream:
+            try:
+                openai_messages = self._to_openai_messages(messages)
+                with span("chat", {"trace_id": trace_id, "mode": self.mode, "defense": self.defense_enabled, "stream": True}):
+                    while True:
+                        conversation_log.append(
+                            {"label": f"LLM call #{round_idx} input", "messages": self._format_openai_messages(openai_messages)}
+                        )
+                        with span(f"llm_call_{round_idx}", {"trace_id": trace_id, "stream": True}):
+                            content, tool_calls_internal, tool_calls_raw = self._openai_stream_once(
+                                openai_messages, on_token=on_token, tool_choice="auto"
+                            )
 
-                if not getattr(response, "tool_calls", None):
-                    break
+                        response = {"content": content, "tool_calls": tool_calls_internal}
+                        conversation_log.append(
+                            {
+                                "label": f"LLM call #{round_idx} output",
+                                "messages": [f"assistant: {content}"],
+                                "tool_calls": tool_calls_internal or None,
+                            }
+                        )
 
-                if round_idx >= max_rounds:
-                    trace.append(f"Max tool call rounds reached ({max_rounds}); stopping.")
-                    break
+                        if not tool_calls_internal:
+                            openai_messages.append({"role": "assistant", "content": content})
+                            break
 
-                with span(f"tool_exec_round_{round_idx}", {"trace_id": trace_id}):
-                    _, tool_messages = self._run_tool_calls(response, trace)
-                messages.extend([response, *tool_messages])
-                self.logger.debug("messages after tools round %d: %s", round_idx, [m.__class__.__name__ for m in messages])
-                round_idx += 1
+                        if round_idx >= max_rounds:
+                            trace.append(f"Max tool call rounds reached ({max_rounds}); stopping.")
+                            openai_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls_raw})
+                            break
 
-        reply_text = response.content if isinstance(response, AIMessage) else str(response)
+                        openai_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls_raw})
+                        with span(f"tool_exec_round_{round_idx}", {"trace_id": trace_id}):
+                            tool_messages = self._run_openai_tool_calls(tool_calls_internal, trace)
+                        openai_messages.extend(tool_messages)
+                        round_idx += 1
 
-        debug_messages = [f"{m.__class__.__name__}: {getattr(m, 'content', '')}" for m in messages]
-        debug_messages.append(f"AI: {reply_text}")
+                reply_text = str(response.get("content") or "")
+                debug_messages = self._format_openai_messages(openai_messages)
+                debug_messages.append(f"AI: {reply_text}")
+            except Exception as exc:  # noqa: BLE001
+                self.logger.exception("Streaming path failed; falling back to non-stream invoke: %s", exc)
+                use_stream = False
+
+        if not use_stream:
+            with span("chat", {"trace_id": trace_id, "mode": self.mode, "defense": self.defense_enabled, "stream": False}):
+                while True:
+                    conversation_log.append({"label": f"LLM call #{round_idx} input", "messages": self._format_messages(messages)})
+
+                    with span(f"llm_call_{round_idx}", {"trace_id": trace_id}):
+                        response = self.llm.invoke(messages, tools=self.tools_schema, tool_choice="auto")
+                    conversation_log.append(
+                        {
+                            "label": f"LLM call #{round_idx} output",
+                            "messages": [f"AIMessage: {getattr(response, 'content', '')}"],
+                            "tool_calls": getattr(response, "tool_calls", None),
+                        }
+                    )
+
+                    if not getattr(response, "tool_calls", None):
+                        break
+
+                    if round_idx >= max_rounds:
+                        trace.append(f"Max tool call rounds reached ({max_rounds}); stopping.")
+                        break
+
+                    with span(f"tool_exec_round_{round_idx}", {"trace_id": trace_id}):
+                        _, tool_messages = self._run_tool_calls(response, trace)
+                    messages.extend([response, *tool_messages])
+                    self.logger.debug(
+                        "messages after tools round %d: %s", round_idx, [m.__class__.__name__ for m in messages]
+                    )
+                    round_idx += 1
+
+            reply_text = response.content if isinstance(response, AIMessage) else str(response)
+
+            debug_messages = [f"{m.__class__.__name__}: {getattr(m, 'content', '')}" for m in messages]
+            debug_messages.append(f"AI: {reply_text}")
 
         self.memory.add_user_message(user_input)
         self.memory.add_ai_message(reply_text)

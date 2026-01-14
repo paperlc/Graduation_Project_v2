@@ -13,7 +13,7 @@
 - 工具解耦：每个 MCP 工具位于 `src/simulation/tools/` 独立文件，方便增删；`src/simulation/server.py` 动态注册。
 
 ## 实现现状与已知限制
-- 前端：无流式输出，移动端适配和交互动效基础；调试视图为文本列表，未结构化分区。
+- 前端：基于 Streamlit Chat 元素，支持会话列表、UI 打字机流式（前端模拟，非 token 级）、结构化 Debug 面板；移动端适配仍可继续优化。
 - Agent/RAG：本地 Chroma 检索，未做重排/去重/可信度过滤；投毒检测仅依赖安全/不安全分库，无自动风险标注。
 - 视觉：本地 Florence Caption + 远程文本判定已通路；远程多模态默认关闭且缺少频控/回退策略。
 - 运维：无容器化/CI/健康探针；日志和指标仅基础打印，未对接监控。
@@ -33,6 +33,12 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 或一键启动（常驻 MCP + 前端）：`bash scripts/quickstart.sh`
+
+前端使用提示：
+- 左侧侧边栏：会话列表（New/Clear）、模式/防御开关、UI 打字机流式、Debug 面板开关。
+- 真实流式：侧边栏 `LLM streaming (token)` 开关（默认读取 `.env` 的 `LLM_STREAM=true|false`），仅 SAFE lane 生效。
+- 图片：上传按钮在底部输入框左侧，上传后发送消息即可触发视觉一致性校验（仅在 SAFE lane 生效）。
+- 主题：默认深色（见 `.streamlit/config.toml`），可按需调整配色。
 
 ## .env 配置说明
 `.env`/`.env.example` 中包含常用项，`python-dotenv` 会自动加载：
