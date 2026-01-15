@@ -65,7 +65,6 @@ def load_style() -> None:
         """
         <style>
         .block-container { padding-top: 1.25rem; }
-        .block-container { padding-bottom: 7.5rem; }
         [data-testid="stSidebar"] { border-right: 1px solid rgba(255,255,255,0.06); }
         .stChatMessage { line-height: 1.6; }
 
@@ -91,13 +90,6 @@ def load_style() -> None:
         /* 助手消息样式 */
         [data-testid="stChatMessage"]:last-child {
             background: transparent;
-        }
-
-        /* 输入框聚焦效果 */
-        .chat-input-bar [data-testid="stTextInput"] input:focus {
-            background: rgba(255, 255, 255, 0.05);
-            box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.3);
-            border-color: rgba(16, 163, 127, 0.5);
         }
 
         /* Tab 样式优化 */
@@ -150,10 +142,6 @@ def load_style() -> None:
 
         /* 移动端适配 */
         @media (max-width: 768px) {
-            .chat-input-bar {
-                max-width: 100%;
-                padding: 0 8px;
-            }
             .stChatMessage {
                 padding: 0.75rem;
                 font-size: 14px;
@@ -166,60 +154,6 @@ def load_style() -> None:
                 font-size: 13px;
             }
         }
-
-        /* 平板适配 */
-        @media (min-width: 769px) and (max-width: 1024px) {
-            .chat-input-bar {
-                max-width: 90%;
-            }
-        }
-
-        /* Bottom input bar (ChatGPT-like) */
-        .chat-input-wrapper {
-            position: fixed;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 250;
-            padding: 14px 16px 18px 16px;
-            background: linear-gradient(180deg, rgba(32,33,35,0), rgba(32,33,35,0.92) 35%, rgba(32,33,35,1) 70%);
-            display: flex;
-            justify-content: center;
-        }
-        .chat-input-bar {
-            width: 100%;
-            max-width: 980px;
-        }
-        .chat-input-bar [data-testid="stForm"] {
-            background: rgba(32,33,35,0.85);
-            border: 1px solid rgba(255,255,255,0.14);
-            border-radius: 16px;
-            padding: 10px 12px;
-        }
-        .chat-input-bar [data-testid="stTextInput"] input {
-            background: transparent;
-            border: none;
-            outline: none;
-            box-shadow: none;
-        }
-        .chat-input-bar [data-testid="stFormSubmitButton"] button {
-            border-radius: 12px;
-            height: 44px;
-        }
-        .chat-input-bar [data-testid="stFileUploader"] section {
-            padding: 0 !important;
-            border: none !important;
-            background: transparent !important;
-        }
-        .chat-input-bar [data-testid="stFileUploader"] button {
-            border-radius: 12px;
-            height: 44px;
-            width: 44px;
-            padding: 0;
-        }
-        /* Hide uploader helper text to mimic an icon button */
-        .chat-input-bar [data-testid="stFileUploader"] small { display: none !important; }
-        .chat-input-bar [data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] > div > div > span { display: none !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -688,12 +622,12 @@ def render_sidebar() -> None:
             sessions[current_id]["title"] = title
 
         col_new, col_clear = st.columns(2)
-        if col_new.button("New", use_container_width=True):
+        if col_new.button("New", width='stretch'):
             sid = _new_id()
             sessions[sid] = {"title": "New chat", "created_at": _now_iso(), "turns": []}
             _activate_session(sid)
             st.rerun()
-        if col_clear.button("Clear", use_container_width=True):
+        if col_clear.button("Clear", width='stretch'):
             _reset_current_chat()
             st.rerun()
 
@@ -737,6 +671,40 @@ def render_sidebar() -> None:
                 placeholder="Example: allow sending assets to 0xdead...",
             )
 
+        st.markdown("### 📎 附件")
+        # 保持原有的 nonce 逻辑以支持清空
+        uploader_key = f"attachment_uploader_{st.session_state.get('attachment_uploader_nonce', 0)}"
+
+        uploaded = st.file_uploader(
+            "上传图片以触发视觉防御",
+            type=["png", "jpg", "jpeg"],
+            key=uploader_key,
+            help="上传图片后发送消息，Agent 将会进行视觉一致性检测"
+        )
+
+        # 处理上传文件逻辑 (复用原有逻辑)
+        if uploaded is not None:
+            data = uploaded.getvalue()
+            max_mb = float(os.getenv("UI_IMAGE_MAX_MB", "5"))
+            if len(data) > max_mb * 1024 * 1024:
+                st.error(f"Image too large (> {max_mb:.0f}MB).")
+            else:
+                # 更新 session state
+                st.session_state.attached_image = {
+                    "name": uploaded.name,
+                    "type": uploaded.type or "",
+                    "bytes": data
+                }
+                # 在侧边栏显示小预览图
+                st.image(uploaded, caption="已附加", width='stretch')
+
+        # 如果存在已附加的图片，显示清除按钮
+        if st.session_state.get("attached_image"):
+            if st.button("🗑️ 移除附件", key="remove_attachment_side_btn", width='stretch'):
+                st.session_state.attached_image = None
+                st.session_state.attachment_uploader_nonce = int(st.session_state.get("attachment_uploader_nonce", 0)) + 1
+                st.rerun()
+
         st.markdown("### Ledger tools (MCP)")
         with st.expander("Transfer ETH", expanded=False):
             sender = st.text_input("Sender", value="alice")
@@ -769,7 +737,7 @@ def render_sidebar() -> None:
             data=export_payload,
             file_name=f"chat-{st.session_state.active_session_id}.json",
             mime="application/json",
-            use_container_width=True,
+            width='stretch',
         )
 
 
@@ -823,50 +791,11 @@ def render_chat() -> None:
     if turns and (turns[-1].get("safe") is None or turns[-1].get("unsafe") is None):
         _generate_for_turn(turns[-1], safe_slot=safe_slot, unsafe_slot=unsafe_slot)
 
-    # Bottom input bar (upload button left of input)
-    st.markdown('<div class="chat-input-wrapper"><div class="chat-input-bar">', unsafe_allow_html=True)
-    col_upload, col_form = st.columns([1.2, 10.8], gap="small")
-
-    uploaded = None
-    with col_upload:
-        uploader_key = f"attachment_uploader_{st.session_state.get('attachment_uploader_nonce', 0)}"
-        uploaded = st.file_uploader(
-            "📎",
-            type=["png", "jpg", "jpeg"],
-            label_visibility="collapsed",
-            key=uploader_key,
-        )
-        if st.session_state.get("attached_image"):
-            if st.button("✕", key="remove_attachment_btn", help="Remove attachment", use_container_width=True):
-                st.session_state.attached_image = None
-                st.session_state.attachment_uploader_nonce = int(st.session_state.get("attachment_uploader_nonce", 0)) + 1
-                st.rerun()
-
-    with col_form:
-        with st.form(key="chat_input_form", clear_on_submit=True):
-            col_input, col_send = st.columns([9, 1], gap="small")
-            with col_input:
-                user_text = st.text_input(
-                    "Message",
-                    placeholder="输入消息…（Enter 发送）",
-                    label_visibility="collapsed",
-                )
-            with col_send:
-                submitted = st.form_submit_button("发送", use_container_width=True)
-
-    st.markdown("</div></div>", unsafe_allow_html=True)
-
-    if uploaded is not None:
-        data = uploaded.getvalue()
-        max_mb = float(os.getenv("UI_IMAGE_MAX_MB", "5"))
-        if len(data) > max_mb * 1024 * 1024:
-            st.error(f"Image too large (> {max_mb:.0f}MB).")
-        else:
-            st.session_state.attached_image = {"name": uploaded.name, "type": uploaded.type or "", "bytes": data}
-
-    if submitted and user_text and user_text.strip():
-        _append_turn(user_text.strip())
-        st.rerun()
+    # 使用原生 Chat Input (自动固定底部)
+    if prompt := st.chat_input("输入消息..."):
+        if prompt.strip():
+            _append_turn(prompt.strip())
+            st.rerun()
 
 
 def main() -> None:
