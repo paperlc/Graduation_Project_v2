@@ -27,6 +27,8 @@ data/ledger/ledger_unsafe.db
 data/ledger/snapshots/
 # Chroma persisted store (recreatable via ingest)
 data/chroma/
+# Memory persisted store (recreatable via chat)
+data/memory/
 # Local RAG corpora outputs (regenerable)
 data/rag/**/.DS_Store
 

@@ -11,8 +11,9 @@
 - 不足：后端仍是非 token 级流式（仅做 UI 打字机模拟）；移动端适配仍可继续优化；安全/无防御仍共用同一 LLM 配置（如需彻底隔离可分配不同模型/Key）。
 
 ## Web3Agent（src/agent/core.py）
-- 实现：LangChain ChatOpenAI；系统提示强调“先答案后依据，链上快照视作真实主网”；工具多轮调用，`TOOL_CALL_MAX_ROUNDS` 控制；写工具支持 `idempotency_key` 防双写；防御态自动链上快照/RAG/视觉；顾问/对话模式提示差异；本地 SimpleChatMemory；本地 Chroma RAG（集合 safe/unsafe 分离，自动加载 tweets）；视觉校验占位；trace_id/span/JSON 日志。
-- 不足：安全策略粗（缺少工具白名单/风险评分等）；记忆未持久化/未摘要；RAG 检索策略简单（无重排/去重/可信度过滤）；视觉校验仅占位；无流式输出，工具并发/批量未做。
+- 实现：LangChain ChatOpenAI；系统提示强调"先答案后依据，链上快照视作真实主网"；工具多轮调用，`TOOL_CALL_MAX_ROUNDS` 控制；写工具支持 `idempotency_key` 防双写；防御态自动链上快照/RAG/视觉；顾问/对话模式提示差异；**ChromaDB 全局共享记忆**（`src/agent/memory.py`）；本地 Chroma RAG（集合 safe/unsafe 分离，自动加载 tweets）；视觉校验占位；trace_id/span/JSON 日志；**流式输出支持**（`_openai_stream_once`）。
+- 记忆系统（已实现）：`ChromaChatMemory` 类提供全局共享持久化存储、CRUD 操作、访问计数追踪和自动清理；集合命名 `web3-memory-{lane}`（车道隔离共享）或 `web3-memory`（完全共享），独立存储目录 `./data/memory/` 与 RAG 隔离；支持消息编辑/删除/获取；语义搜索自动更新访问计数；基于访问次数和时间的清理机制（启动时/定时/手动三种触发模式）；通过 `MEMORY_*` 系列环境变量控制。
+- 不足：安全策略粗（缺少工具白名单/风险评分等）；**记忆摘要尚未实现**；RAG 检索策略简单（无重排/去重/可信度过滤）；视觉校验仅占位；工具并发/批量未做。
 
 ## MCP 客户端（src/mcp_client/client.py）
 - 实现：SSE/stdio，两种 transport；超时与重试可配；每次调用独立 session；日志含 trace_id。

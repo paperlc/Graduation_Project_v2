@@ -6,8 +6,9 @@
 - ChatGPT 风格深色对话界面，支持图片上传触发视觉一致性校验。
 - 双模式：对话模式（更贴近闲聊/问答）、顾问模式（更偏投资建议/风控提示）；可在侧边栏切换。
 - 防御链路：链上快照（MCP 工具）、RAG 检索、视觉核验，全部可开/关；关闭后仍可正常对话和工具调用。
+- **记忆持久化**：基于 ChromaDB 的全局共享对话历史存储，独立目录 `./data/memory/` 与 RAG 隔离；支持访问计数追踪、基于访问频率的自动清理、多会话管理和语义搜索；重启后记忆完整保留。
 - 攻击演示：一键内存注入、RAG 投毒，观察智能体的防御响应。
-- 双答案视图：同一问题同时展示“无防御/被攻击”与“防御开启”两种回复，方便对比。
+- 双答案视图：同一问题同时展示"无防御/被攻击"与"防御开启"两种回复，方便对比。
 - MCP 工具：通过 MCP Server 提供链上模拟工具，LLM 通过 function calling 自动选择工具（需先启动 MCP）。
 - 文本账本：`data/ledger/ledger.json` 保存账户、代币、授权、交易、ENS、价格、声誉、流动池等，不在 Python 中硬编码，可换不同场景的账本文件。
 - 工具解耦：每个 MCP 工具位于 `src/simulation/tools/` 独立文件，方便增删；`src/simulation/server.py` 动态注册。
@@ -78,6 +79,17 @@ streamlit run app.py
 - RAG 集合（可选覆盖默认集合名）
   - `RAG_COLLECTION_SAFE`（默认 web3-rag-safe）
   - `RAG_COLLECTION_UNSAFE`（默认 web3-rag-unsafe）
+- **记忆持久化**（全局共享架构）
+  - `MEMORY_PATH`（默认 ./data/memory，独立存储目录）
+  - `MEMORY_SHARED_MODE`（默认 global，完全共享 | lane 车道隔离共享）
+  - `MEMORY_USE_PERSISTENT`（默认 true，启用 ChromaDB 持久化记忆；设为 false 回退到内存 SimpleChatMemory）
+  - `MEMORY_USE_EMBEDDINGS`（默认 true，是否对消息进行向量化以支持语义搜索）
+  - `MEMORY_CLEANUP_MODE`（默认 startup，何时清理旧记忆：startup/scheduled/manual）
+  - `MEMORY_CLEANUP_INTERVAL_HOURS`（默认 24，定时清理间隔，仅 scheduled 模式生效）
+  - `MEMORY_RETENTION_DAYS`（默认 10，保留天数，超过此天数且访问少的记忆将被清理）
+  - `MEMORY_MIN_ACCESS_COUNT`（默认 1，最小访问次数阈值）
+  - `MEMORY_CONTEXT_LIMIT`（默认 50，加载到 LLM 上下文的最大消息数）
+  - `MEMORY_UI_SEARCH_ENABLED`（默认 true，启用前端记忆搜索功能）
 
 ## RAG / 视觉兼容策略
 - RAG：`RAG_PROVIDER=local` 时使用本地 Chroma；设为 `remote` 时请求 `RAG_REMOTE_URL`（预期返回 JSON 中的 `documents` 或 `results.text`）。  

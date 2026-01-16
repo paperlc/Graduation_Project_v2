@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import time
 from base64 import b64encode
@@ -21,13 +22,22 @@ from src.attacks.poison_rag import poison_rag
 from src.mcp_client.client import MCPToolClient
 from src.utils.telemetry import configure_logging
 
-
-load_dotenv()
-configure_logging(os.getenv("LOG_LEVEL", "WARNING"))
-
 import logging
 
+load_dotenv()
+configure_logging(os.getenv("LOG_LEVEL", "INFO"))
+
 logger = logging.getLogger(__name__)
+
+# Print critical environment variables for debugging (using print to ensure terminal output)
+print("=" * 50, file=sys.stderr)
+print("=== 环境变量调试 ===", file=sys.stderr)
+print(f"MEMORY_USE_PERSISTENT = {os.getenv('MEMORY_USE_PERSISTENT')}", file=sys.stderr)
+print(f"MEMORY_SHARED_MODE = {os.getenv('MEMORY_SHARED_MODE')}", file=sys.stderr)
+print(f"MEMORY_PATH = {os.getenv('MEMORY_PATH')}", file=sys.stderr)
+print(f"LOG_LEVEL = {os.getenv('LOG_LEVEL')}", file=sys.stderr)
+print("=" * 50, file=sys.stderr)
+sys.stderr.flush()
 
 st.set_page_config(page_title="Web3 Agent Demo", page_icon="🛡️", layout="wide")
 
@@ -185,19 +195,25 @@ def init_state() -> None:
     st.session_state.tool_caller = st.session_state.get("tool_caller_safe") or st.session_state.tool_caller_unsafe
 
     if "agent_safe" not in st.session_state:
+        sid = st.session_state.get("active_session_id") or _new_id()
         st.session_state.agent_safe = Web3Agent(
             tool_caller=st.session_state.tool_caller_safe,
             collection_name="web3-rag-safe",
+            session_id=sid,
+            use_persistent_memory=True,
         )
-        logger.info("Initialized safe agent.")
+        logger.info("Initialized safe agent with session_id=%s", sid)
 
     if "agent_unsafe" not in st.session_state:
+        sid = st.session_state.get("active_session_id") or _new_id()
         st.session_state.agent_unsafe = Web3Agent(
             tool_caller=st.session_state.tool_caller_unsafe,
             defense_enabled=False,
             collection_name="web3-rag-unsafe",
+            session_id=sid,
+            use_persistent_memory=True,
         )
-        logger.info("Initialized unsafe agent.")
+        logger.info("Initialized unsafe agent with session_id=%s", sid)
 
     if "sessions" not in st.session_state:
         sid = _new_id()
@@ -205,6 +221,9 @@ def init_state() -> None:
             sid: {"title": "New chat", "created_at": _now_iso(), "turns": []},
         }
         st.session_state.active_session_id = sid
+        # Reinitialize agents with the new session_id
+        if "agent_safe" in st.session_state:
+            st.session_state.agent_safe.session_id = sid
 
     if "attached_image" not in st.session_state:
         st.session_state.attached_image = None  # {"name": str, "type": str, "bytes": bytes}
@@ -242,32 +261,46 @@ def _get_active_session() -> Dict[str, Any]:
 
 
 def _rebuild_agent_memory(turns: list[dict]) -> None:
+    """Rebuild agent memory from turns (fallback when persistent memory fails)."""
     agent_safe: Web3Agent = st.session_state.agent_safe
     agent_unsafe: Web3Agent = st.session_state.agent_unsafe
-    agent_safe.memory.clear()
-    agent_unsafe.memory.clear()
+    session_id = st.session_state.active_session_id
+
+    # Clear with session_id filter
+    agent_safe.memory.clear(session_id=session_id)
+    agent_unsafe.memory.clear(session_id=session_id)
 
     for turn in turns:
         user_text = (turn.get("user") or "").strip()
         if not user_text:
             continue
-        agent_safe.memory.add_user_message(user_text)
-        agent_unsafe.memory.add_user_message(user_text)
+        agent_safe.memory.add_user_message(user_text, session_id=session_id)
+        agent_unsafe.memory.add_user_message(user_text, session_id=session_id)
         safe = turn.get("safe") or {}
         unsafe = turn.get("unsafe") or {}
         if safe.get("reply"):
-            agent_safe.memory.add_ai_message(str(safe["reply"]))
+            agent_safe.memory.add_ai_message(str(safe["reply"]), session_id=session_id)
         if unsafe.get("reply"):
-            agent_unsafe.memory.add_ai_message(str(unsafe["reply"]))
+            agent_unsafe.memory.add_ai_message(str(unsafe["reply"]), session_id=session_id)
 
 
 def _activate_session(session_id: str) -> None:
+    """Activate a session by updating session_id (memory is now global shared)."""
     if session_id not in st.session_state.sessions:
         return
     st.session_state.active_session_id = session_id
     st.session_state.attached_image = None
     st.session_state.attachment_uploader_nonce = int(st.session_state.get("attachment_uploader_nonce", 0)) + 1
-    _rebuild_agent_memory(st.session_state.sessions[session_id]["turns"])
+
+    # Update session_id on agents (memory is now global shared, no need to recreate)
+    agent_safe: Web3Agent = st.session_state.agent_safe
+    agent_unsafe: Web3Agent = st.session_state.agent_unsafe
+
+    agent_safe.session_id = session_id
+    agent_unsafe.session_id = session_id
+
+    # Memory object remains unchanged - it uses session_id for filtering during load/save
+    logger.info("Switched to session %s (memory is global shared)", session_id)
 
 
 def _reset_current_chat() -> None:

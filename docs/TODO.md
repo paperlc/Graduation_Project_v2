@@ -10,8 +10,19 @@
 
 ## Agent 与 RAG（已部分实现：本地 Chroma、tweets 注入、tools/RAG 自动串联）
 - [ ] RAG 召回质量：增加检索重排/去重，命中文档与来源在 trace/UI 中展示；支持按情绪/可信度过滤（利用元数据）。
-- [ ] 投毒防护：对 unsafe 语料做基础检测（长度/关键词/来源黑名单），命中时在回复中显式提示风险；设计“高权重伪造文本”注入剧本并验证防御。
-- [ ] 情绪分析/决策演示：在回复中显式展示情绪判断与决策依据（RAG / 链上快照 / 视觉判定），以支撑“模拟交易决策”场景。
+- [ ] 投毒防护：对 unsafe 语料做基础检测（长度/关键词/来源黑名单），命中时在回复中显式提示风险；设计"高权重伪造文本"注入剧本并验证防御。
+- [ ] 情绪分析/决策演示：在回复中显式展示情绪判断与决策依据（RAG / 链上快照 / 视觉判定），以支撑"模拟交易决策"场景。
+
+## 记忆持久化（已重构：全局共享架构 + 访问计数 + 自动清理）
+- [x] ChromaDB 持久化：对话历史存储到全局共享集合（`web3-memory-{lane}` 或 `web3-memory`），独立存储目录 `./data/memory/`。
+- [x] CRUD 操作：完整的增删改查功能，包括 `add_user_message()`, `add_ai_message()`, `delete_message()`, `edit_message()`, `get_message()`。
+- [x] 语义搜索：支持基于嵌入向量的语义检索历史对话，可通过 `search_messages(query, n_results, role_filter)` 调用，搜索时自动更新访问计数。
+- [x] 访问计数：追踪消息访问次数（`access_count`, `last_accessed_at`），支持 `increment_access()`, `batch_increment_access()`, `get_access_stats()`。
+- [x] 自动清理：基于访问次数和时间的清理机制，删除超过保留天数且访问次数少的消息，支持启动时/定时/手动三种触发模式。
+- [x] 前端集成：会话切换时无需重建记忆（全局共享），支持多会话管理。
+- [x] 向后兼容：通过 `MEMORY_USE_PERSISTENT` 环境变量控制，可随时回退到 `SimpleChatMemory`。
+- [ ] 记忆摘要：长对话自动摘要，减少上下文长度（未来）。
+- [ ] 前端管理界面：可视化的记忆搜索、编辑和删除功能（未来）。
 
 ## 视觉一致性（已实现：本地 Florence Caption + 远程文本判定，可选远程多模态，模式由 `VISION_PIPELINE_MODE` 控制）
 - [ ] 远程文本判定稳健化：为 `VISION_REMOTE_TEXT_*` 调用增加超时、重试、失败回退策略；记录使用路径与结果到 trace。

@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from .vision import verify_image_consistency
+from .memory import ChromaChatMemory
 from src.utils.telemetry import new_trace_id, get_trace_id, set_trace_id, span
 
 
@@ -31,16 +32,26 @@ class SimpleChatMemory:
         self.chat_memory = self  # compatibility with older code paths
         self._messages: List[BaseMessage] = []
 
-    def add_user_message(self, text: str) -> None:
+    def add_user_message(self, text: str, session_id: str | None = None) -> None:
+        """Add user message (session_id ignored for compatibility)."""
+        _ = session_id  # Mark as intentionally unused
         self._messages.append(HumanMessage(content=text))
 
-    def add_ai_message(self, text: str) -> None:
+    def add_ai_message(self, text: str, session_id: str | None = None) -> None:
+        """Add AI message (session_id ignored for compatibility)."""
+        _ = session_id  # Mark as intentionally unused
         self._messages.append(AIMessage(content=text))
 
-    def load(self) -> List[BaseMessage]:
-        return list(self._messages)
+    def load(self, session_id: str | None = None, limit: int | None = None) -> List[BaseMessage]:
+        """Load messages (session_id ignored for compatibility)."""
+        _ = session_id  # Mark as intentionally unused
+        if limit is None or limit >= len(self._messages):
+            return list(self._messages)
+        return self._messages[-limit:]
 
-    def clear(self) -> None:
+    def clear(self, session_id: str | None = None) -> None:
+        """Clear messages (session_id ignored for compatibility)."""
+        _ = session_id  # Mark as intentionally unused
         self._messages.clear()
 
 
@@ -70,6 +81,8 @@ class Web3Agent:
         chroma_path: str | None = None,
         mode: str = "chat",
         collection_name: str = "web3-rag",
+        session_id: str | None = None,
+        use_persistent_memory: bool | None = None,
     ):
         self.logger = logging.getLogger(__name__)
         llm_model = model or os.getenv("LLM_MODEL") or "gpt-4o-mini"
@@ -87,7 +100,14 @@ class Web3Agent:
             openai_api_key=llm_api_key,
             base_url=llm_base_url,
         )
-        # Minimal in-memory history; can be replaced/disabled as needed.
+        # Memory configuration
+        self.session_id = session_id
+        self._use_persistent_memory = (
+            use_persistent_memory
+            if use_persistent_memory is not None
+            else (os.getenv("MEMORY_USE_PERSISTENT", "false").lower() == "true")
+        )
+        # Default to in-memory memory; will be upgraded to persistent if configured
         self.memory = SimpleChatMemory()
         defense_default = (
             defense_enabled
@@ -213,6 +233,28 @@ class Web3Agent:
                 self.chroma_client = None
         else:
             self.chroma_client = None
+
+        # Upgrade to persistent memory if configured and available
+        if self._use_persistent_memory and self.session_id and embedding_function:
+            try:
+                # Log environment variables for debugging
+                mem_path = os.getenv("MEMORY_PATH", "./data/memory")
+                shared_mode = os.getenv("MEMORY_SHARED_MODE", "lane")
+                self.logger.info("MEMORY_PATH=%s, MEMORY_SHARED_MODE=%s", mem_path, shared_mode)
+
+                # New architecture: global shared memory (no session_id in constructor)
+                self.memory = ChromaChatMemory(
+                    lane="safe" if self.defense_enabled else "unsafe",
+                    chroma_path=mem_path,
+                    embedding_function=embedding_function,
+                    shared_mode=shared_mode,
+                    cleanup_mode=os.getenv("MEMORY_CLEANUP_MODE", "startup"),
+                    retention_days=int(os.getenv("MEMORY_RETENTION_DAYS", "10")),
+                )
+                self.logger.info("Using persistent ChromaDB memory (shared mode=%s) for session %s", shared_mode, self.session_id)
+            except Exception as exc:
+                self.logger.warning("Failed to initialize persistent memory, falling back to in-memory: %s", exc)
+                self.memory = SimpleChatMemory()
 
         # Build tool schemas for LLM function calling
         self.tools_schema = self._build_tools_schema()
@@ -694,8 +736,8 @@ class Web3Agent:
                 reply_text = "⚠️ 图片与描述不一致，已拦截回答。请上传匹配的图片或修改描述。"
                 debug_messages = [f"{m.__class__.__name__}: {getattr(m, 'content', '')}" for m in []]
                 debug_messages.append(f"AI: {reply_text}")
-                self.memory.add_user_message(user_input)
-                self.memory.add_ai_message(reply_text)
+                self.memory.add_user_message(user_input, session_id=self.session_id)
+                self.memory.add_ai_message(reply_text, session_id=self.session_id)
                 return ChatResult(
                     reply=reply_text,
                     vision_checked=vision_checked,
@@ -744,7 +786,9 @@ class Web3Agent:
 
         system_prompt = self._build_system_prompt(chain_context, rag_context, vision_note)
 
-        history_messages = self.memory.load()
+        # Load messages with session_id filter
+        context_limit = int(os.getenv("MEMORY_CONTEXT_LIMIT", "50"))
+        history_messages = self.memory.load(session_id=self.session_id, limit=context_limit)
         messages: List[BaseMessage] = [SystemMessage(content=system_prompt), *history_messages, HumanMessage(content=user_input)]
         self.logger.debug("messages before LLM: %s", [m.__class__.__name__ for m in messages])
         self.logger.debug("system prompt: %s", system_prompt)
@@ -834,8 +878,9 @@ class Web3Agent:
             debug_messages = [f"{m.__class__.__name__}: {getattr(m, 'content', '')}" for m in messages]
             debug_messages.append(f"AI: {reply_text}")
 
-        self.memory.add_user_message(user_input)
-        self.memory.add_ai_message(reply_text)
+        # Save messages with session_id
+        self.memory.add_user_message(user_input, session_id=self.session_id)
+        self.memory.add_ai_message(reply_text, session_id=self.session_id)
         self.logger.info("chat end, reply length=%d trace=%s", len(reply_text), trace)
 
         return ChatResult(
